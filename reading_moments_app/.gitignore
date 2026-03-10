@@ -12,9 +12,14 @@
 .swiftpm/
 migrate_working_dir/
 
+node_modules
 .env
-.env.*
+build
+.dart_tool
+ios/Pods
+macos/Pods
 *.zip
+
 
 # IntelliJ related
 *.iml

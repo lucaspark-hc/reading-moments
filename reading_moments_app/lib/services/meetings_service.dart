@@ -54,6 +54,29 @@ class MeetingsService {
     });
   }
 
+  Future<void> updateMeeting({
+    required int meetingId,
+    required String title,
+    required DateTime meetingDate,
+    required String location,
+    required int maxParticipants,
+    required String hostReason,
+    required String status,
+  }) async {
+    await supabase.from('meetings').update({
+      'title': title,
+      'meeting_date': meetingDate.toUtc().toIso8601String(),
+      'location': location.isEmpty ? null : location,
+      'max_participants': maxParticipants,
+      'host_reason': hostReason.isEmpty ? null : hostReason,
+      'status': status,
+    }).eq('id', meetingId);
+  }
+
+  Future<void> deleteMeeting(int meetingId) async {
+    await supabase.from('meetings').delete().eq('id', meetingId);
+  }
+
   Future<String?> loadMyParticipantStatus(int meetingId, String userId) async {
     final row = await supabase
         .from('meeting_participants')

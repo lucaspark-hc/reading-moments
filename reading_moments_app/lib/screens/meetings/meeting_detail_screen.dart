@@ -37,15 +37,12 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
 
   bool get _isHost => supabase.auth.currentUser?.id == widget.meeting.hostId;
   bool get _isApprovedParticipant => _myParticipantStatus == 'approved';
-
-  /// 질문 조회 가능: 호스트 또는 승인 참여자
   bool get _canViewQuestions => _isHost || _isApprovedParticipant;
-
-  /// 답변 가능: 호스트 또는 승인 참여자
   bool get _canAnswerQuestions => _isHost || _isApprovedParticipant;
-
   bool get _canRequestJoin =>
       !_isHost && (_myParticipantStatus == null || _myParticipantStatus == 'rejected');
+
+  bool get _canGenerateMeetingRecap => _isHost && widget.meeting.status == 'finished';
 
   @override
   void initState() {
@@ -69,7 +66,6 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
 
       final status = await _meetingsService.loadMyParticipantStatus(widget.meeting.id, uid);
       if (!mounted) return;
-
       setState(() {
         _myParticipantStatus = status;
       });
@@ -110,7 +106,7 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
       _recaps = await _recapsService.loadRecaps(widget.meeting.id);
     } catch (e) {
       if (!mounted) return;
-      showToast(context, '요약 조회 실패: $e');
+      showToast(context, '모임요약 조회 실패: $e');
     } finally {
       if (mounted) setState(() => _loadingRecaps = false);
     }
@@ -314,8 +310,8 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
   }
 
   Future<void> _generateRecap() async {
-    if (!_isHost) {
-      showToast(context, '호스트만 요약을 생성할 수 있습니다.');
+    if (!_canGenerateMeetingRecap) {
+      showToast(context, '모임 완료(finished) 상태에서만 모임요약을 생성할 수 있습니다.');
       return;
     }
 
@@ -333,7 +329,7 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
       );
 
       if (!mounted) return;
-      showToast(context, 'AI 요약 생성 완료');
+      showToast(context, '모임요약 생성 완료');
       await _loadRecaps();
 
       if (!mounted) return;
@@ -345,7 +341,7 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
       );
     } catch (e) {
       if (!mounted) return;
-      showToast(context, '요약 생성 실패: $e');
+      showToast(context, '모임요약 생성 실패: $e');
     } finally {
       if (mounted) setState(() => _loadingRecap = false);
     }
@@ -355,7 +351,7 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
     await _loadRecaps();
     if (_recaps.isEmpty) {
       if (!mounted) return;
-      showToast(context, '생성된 AI 요약이 없습니다.');
+      showToast(context, '생성된 모임요약이 없습니다.');
       return;
     }
 
@@ -408,7 +404,6 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
           else
             Text('내 참여 상태: ${_myParticipantStatus ?? "미신청"}'),
           const SizedBox(height: 16),
-
           if (!_isHost) ...[
             if (_canRequestJoin)
               SizedBox(
@@ -424,7 +419,6 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
               const Text('이 모임에 참여 중입니다.'),
             const SizedBox(height: 24),
           ],
-
           if (_isHost) ...[
             const Text(
               '참여 신청자',
@@ -461,27 +455,34 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
               ),
             const SizedBox(height: 24),
           ],
-
           Row(
             children: [
               const Expanded(
                 child: Text(
-                  'AI 요약',
+                  '모임요약',
                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                 ),
               ),
             ],
           ),
           const SizedBox(height: 8),
+          if (_isHost && !_canGenerateMeetingRecap) ...[
+            const Text(
+              '모임요약은 모임 상태가 finished 일 때 생성할 수 있습니다.',
+            ),
+            const SizedBox(height: 8),
+          ],
           Row(
             children: [
               Expanded(
                 child: SizedBox(
                   height: 48,
                   child: FilledButton.icon(
-                    onPressed: _isHost && !_loadingRecap ? _generateRecap : null,
+                    onPressed: _loadingRecap ? null : (_canGenerateMeetingRecap ? _generateRecap : null),
                     icon: const Icon(Icons.auto_awesome),
-                    label: _loadingRecap ? const Text('생성 중...') : const Text('생성'),
+                    label: _loadingRecap
+                        ? const Text('생성 중...')
+                        : const Text('생성'),
                   ),
                 ),
               ),
@@ -498,7 +499,6 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
               ),
             ],
           ),
-
           const SizedBox(height: 24),
           Row(
             children: [
@@ -515,7 +515,6 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
             ],
           ),
           const SizedBox(height: 8),
-
           if (!_canViewQuestions)
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 12),
