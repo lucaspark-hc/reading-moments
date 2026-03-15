@@ -52,3 +52,36 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+#0316 추가
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Flutter
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+
+# iOS
+ios/Flutter/Flutter.framework
+ios/Flutter/Flutter.podspec
+ios/Flutter/App.framework
+ios/.symlinks/
+ios/Pods/
+ios/Runner.xcworkspace
+
+# Android
+android/.gradle
+android/local.properties
+
+# Logs
+*.log
+
+# Server
+reading_moments_server/node_modules
+
+# Backups
+*_backup/
+flutter_backup/
