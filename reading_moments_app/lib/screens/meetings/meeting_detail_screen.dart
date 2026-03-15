@@ -6,6 +6,7 @@ import 'package:reading_moments_app/models/question_item.dart';
 import 'package:reading_moments_app/models/recap_item.dart';
 import 'package:reading_moments_app/screens/meetings/question_detail_screen.dart';
 import 'package:reading_moments_app/screens/recaps/recap_detail_screen.dart';
+import 'package:reading_moments_app/services/library_service.dart';
 import 'package:reading_moments_app/services/meetings_service.dart';
 import 'package:reading_moments_app/services/questions_service.dart';
 import 'package:reading_moments_app/services/recaps_service.dart';
@@ -24,30 +25,65 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
   final MeetingsService _meetingsService = MeetingsService();
   final QuestionsService _questionsService = QuestionsService();
   final RecapsService _recapsService = RecapsService();
+  final LibraryService _libraryService = LibraryService();
 
   bool _loadingQuestions = false;
   bool _loadingParticipants = false;
   bool _loadingRecap = false;
   bool _loadingRecaps = false;
+  bool _loadingWishlistState = false;
+  bool _savingWishlist = false;
 
   List<QuestionItem> _questions = [];
   List<ParticipantItem> _requestedParticipants = [];
   List<RecapItem> _recaps = [];
   String? _myParticipantStatus;
+  bool _isWishlisted = false;
 
   bool get _isHost => supabase.auth.currentUser?.id == widget.meeting.hostId;
   bool get _isApprovedParticipant => _myParticipantStatus == 'approved';
   bool get _canViewQuestions => _isHost || _isApprovedParticipant;
   bool get _canAnswerQuestions => _isHost || _isApprovedParticipant;
   bool get _canRequestJoin =>
-      !_isHost && (_myParticipantStatus == null || _myParticipantStatus == 'rejected');
+      !_isHost &&
+      (_myParticipantStatus == null || _myParticipantStatus == 'rejected');
 
-  bool get _canGenerateMeetingRecap => _isHost && widget.meeting.status == 'finished';
+  bool get _canGenerateMeetingRecap =>
+      _isHost && widget.meeting.status == 'finished';
+  bool get _hasBook => widget.meeting.book != null;
 
   @override
   void initState() {
     super.initState();
     _loadAll();
+  }
+
+  String _participantStatusLabel(String? status) {
+    switch (status) {
+      case 'pending':
+        return '신청중';
+      case 'approved':
+        return '참여중';
+      case 'rejected':
+        return '거절됨';
+      default:
+        return '미신청';
+    }
+  }
+
+  String _meetingStatusLabel(String status) {
+    switch (status) {
+      case 'open':
+        return '모집중';
+      case 'closed':
+        return '마감';
+      case 'finished':
+        return '종료';
+      case 'in_progress':
+        return '진행중';
+      default:
+        return status;
+    }
   }
 
   Future<void> _loadAll() async {
@@ -56,7 +92,67 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
       _loadQuestions(),
       _loadRecaps(),
       if (_isHost) _loadRequestedParticipants(),
+      if (_hasBook) _loadWishlistState(),
     ]);
+  }
+
+  Future<void> _loadWishlistState() async {
+    final book = widget.meeting.book;
+    if (book == null) return;
+
+    setState(() => _loadingWishlistState = true);
+    try {
+      final wishlist = await _libraryService.loadWishlistBooks();
+      final exists = wishlist.any((b) => b.id == book.id);
+
+      if (!mounted) return;
+      setState(() {
+        _isWishlisted = exists;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      showToast(context, '읽고 싶은 책 상태 조회 실패: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _loadingWishlistState = false);
+      }
+    }
+  }
+
+  Future<void> _toggleWishlist() async {
+    final book = widget.meeting.book;
+    if (book == null) {
+      showToast(context, '책 정보가 없습니다.');
+      return;
+    }
+
+    if (_savingWishlist) return;
+
+    setState(() => _savingWishlist = true);
+    try {
+      if (_isWishlisted) {
+        await _libraryService.removeWishlistBook(book.id);
+        if (!mounted) return;
+        setState(() {
+          _isWishlisted = false;
+        });
+        showToast(context, '읽고 싶은 책에서 제거되었습니다.');
+      } else {
+        await _libraryService.addWishlistBook(book.id);
+        if (!mounted) return;
+        setState(() {
+          _isWishlisted = true;
+        });
+        showToast(context, '읽고 싶은 책에 저장되었습니다.');
+      }
+    } catch (e) {
+      if (!mounted) return;
+      showToast(context, '읽고 싶은 책 저장 처리 실패: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _savingWishlist = false);
+      }
+    }
   }
 
   Future<void> _loadMyParticipantStatus() async {
@@ -64,7 +160,10 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
       final uid = supabase.auth.currentUser?.id;
       if (uid == null) return;
 
-      final status = await _meetingsService.loadMyParticipantStatus(widget.meeting.id, uid);
+      final status = await _meetingsService.loadMyParticipantStatus(
+        widget.meeting.id,
+        uid,
+      );
       if (!mounted) return;
       setState(() {
         _myParticipantStatus = status;
@@ -78,8 +177,9 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
   Future<void> _loadRequestedParticipants() async {
     setState(() => _loadingParticipants = true);
     try {
-      _requestedParticipants =
-          await _meetingsService.loadRequestedParticipants(widget.meeting.id);
+      _requestedParticipants = await _meetingsService.loadRequestedParticipants(
+        widget.meeting.id,
+      );
     } catch (e) {
       if (!mounted) return;
       showToast(context, '신청자 목록 조회 실패: $e');
@@ -120,7 +220,10 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
     }
 
     try {
-      await _meetingsService.requestJoin(meetingId: widget.meeting.id, userId: uid);
+      await _meetingsService.requestJoin(
+        meetingId: widget.meeting.id,
+        userId: uid,
+      );
       if (!mounted) return;
       showToast(context, '참여 신청이 완료되었습니다.');
       await _loadMyParticipantStatus();
@@ -131,8 +234,18 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
   }
 
   Future<void> _approveParticipant(ParticipantItem p) async {
+    final hostUserId = supabase.auth.currentUser?.id;
+    if (hostUserId == null) {
+      showToast(context, '로그인이 필요합니다.');
+      return;
+    }
+
     try {
-      await _meetingsService.approveParticipant(p.id);
+      await _meetingsService.approveParticipant(
+        meetingId: widget.meeting.id,
+        participantUserId: p.userId,
+        hostUserId: hostUserId,
+      );
       if (!mounted) return;
       showToast(context, '승인 완료');
       await _loadRequestedParticipants();
@@ -143,8 +256,18 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
   }
 
   Future<void> _rejectParticipant(ParticipantItem p) async {
+    final hostUserId = supabase.auth.currentUser?.id;
+    if (hostUserId == null) {
+      showToast(context, '로그인이 필요합니다.');
+      return;
+    }
+
     try {
-      await _meetingsService.rejectParticipant(p.id);
+      await _meetingsService.rejectParticipant(
+        meetingId: widget.meeting.id,
+        participantUserId: p.userId,
+        hostUserId: hostUserId,
+      );
       if (!mounted) return;
       showToast(context, '거절 완료');
       await _loadRequestedParticipants();
@@ -299,7 +422,10 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
     }
 
     try {
-      await _questionsService.editQuestion(questionId: q.id, question: updatedText);
+      await _questionsService.editQuestion(
+        questionId: q.id,
+        question: updatedText,
+      );
       if (!mounted) return;
       showToast(context, '질문 수정 완료');
       await _loadQuestions();
@@ -335,9 +461,7 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
       if (!mounted) return;
       await Navigator.push(
         context,
-        MaterialPageRoute(
-          builder: (_) => RecapDetailScreen(recap: recap),
-        ),
+        MaterialPageRoute(builder: (_) => RecapDetailScreen(recap: recap)),
       );
     } catch (e) {
       if (!mounted) return;
@@ -372,6 +496,26 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
     return Scaffold(
       appBar: AppBar(
         title: Text(m.title),
+        actions: [
+          if (book != null)
+            IconButton(
+              onPressed: (_loadingWishlistState || _savingWishlist)
+                  ? null
+                  : _toggleWishlist,
+              tooltip: _isWishlisted ? '읽고 싶은 책에서 제거' : '읽고 싶은 책에 저장',
+              icon: (_loadingWishlistState || _savingWishlist)
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : Icon(
+                      _isWishlisted
+                          ? Icons.bookmark
+                          : Icons.bookmark_add_outlined,
+                    ),
+            ),
+        ],
       ),
       body: ListView(
         padding: const EdgeInsets.all(20),
@@ -384,6 +528,27 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
             const SizedBox(height: 4),
             Text('저자: ${book.author ?? "-"}'),
             Text('ISBN: ${book.isbn}'),
+            const SizedBox(height: 12),
+            SizedBox(
+              height: 48,
+              child: OutlinedButton.icon(
+                onPressed: (_loadingWishlistState || _savingWishlist)
+                    ? null
+                    : _toggleWishlist,
+                icon: (_loadingWishlistState || _savingWishlist)
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : Icon(
+                        _isWishlisted
+                            ? Icons.bookmark
+                            : Icons.bookmark_add_outlined,
+                      ),
+                label: Text(_isWishlisted ? '읽고 싶은 책 저장됨' : '읽고 싶은 책에 저장'),
+              ),
+            ),
             const SizedBox(height: 16),
           ],
           Text('모임 제목: ${m.title}'),
@@ -394,7 +559,7 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
             Text('선정 이유: ${m.hostReason!}'),
           ],
           Text('장소: ${m.location ?? "-"}'),
-          Text('상태: ${m.status}'),
+          Text('상태: ${_meetingStatusLabel(m.status)}'),
           const SizedBox(height: 8),
           if (_isHost)
             const Text(
@@ -402,7 +567,7 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
               style: TextStyle(fontWeight: FontWeight.bold),
             )
           else
-            Text('내 참여 상태: ${_myParticipantStatus ?? "미신청"}'),
+            Text('내 참여 상태: ${_participantStatusLabel(_myParticipantStatus)}'),
           const SizedBox(height: 16),
           if (!_isHost) ...[
             if (_canRequestJoin)
@@ -413,10 +578,12 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
                   child: const Text('참여 신청'),
                 ),
               )
-            else if (_myParticipantStatus == 'requested')
+            else if (_myParticipantStatus == 'pending')
               const Text('승인 대기중입니다.')
             else if (_myParticipantStatus == 'approved')
-              const Text('이 모임에 참여 중입니다.'),
+              const Text('이 모임에 참여 중입니다.')
+            else if (_myParticipantStatus == 'rejected')
+              const Text('참여 신청이 거절되었습니다.'),
             const SizedBox(height: 24),
           ],
           if (_isHost) ...[
@@ -467,9 +634,7 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
           ),
           const SizedBox(height: 8),
           if (_isHost && !_canGenerateMeetingRecap) ...[
-            const Text(
-              '모임요약은 모임 상태가 finished 일 때 생성할 수 있습니다.',
-            ),
+            const Text('모임요약은 모임 상태가 finished 일 때 생성할 수 있습니다.'),
             const SizedBox(height: 8),
           ],
           Row(
@@ -478,7 +643,9 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
                 child: SizedBox(
                   height: 48,
                   child: FilledButton.icon(
-                    onPressed: _loadingRecap ? null : (_canGenerateMeetingRecap ? _generateRecap : null),
+                    onPressed: _loadingRecap
+                        ? null
+                        : (_canGenerateMeetingRecap ? _generateRecap : null),
                     icon: const Icon(Icons.auto_awesome),
                     label: _loadingRecap
                         ? const Text('생성 중...')
@@ -493,7 +660,9 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
                   child: OutlinedButton.icon(
                     onPressed: _loadingRecaps ? null : _openLatestRecap,
                     icon: const Icon(Icons.article),
-                    label: Text(_recaps.isEmpty ? '보기' : '보기 (${_recaps.length})'),
+                    label: Text(
+                      _recaps.isEmpty ? '보기' : '보기 (${_recaps.length})',
+                    ),
                   ),
                 ),
               ),

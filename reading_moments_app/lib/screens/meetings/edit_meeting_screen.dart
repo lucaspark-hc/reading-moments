@@ -6,10 +6,7 @@ import 'package:reading_moments_app/utils/app_utils.dart';
 class EditMeetingScreen extends StatefulWidget {
   final MeetingModel meeting;
 
-  const EditMeetingScreen({
-    super.key,
-    required this.meeting,
-  });
+  const EditMeetingScreen({super.key, required this.meeting});
 
   @override
   State<EditMeetingScreen> createState() => _EditMeetingScreenState();
@@ -36,9 +33,12 @@ class _EditMeetingScreenState extends State<EditMeetingScreen> {
 
     _titleController = TextEditingController(text: meeting.title);
     _locationController = TextEditingController(text: meeting.location ?? '');
-    _maxParticipantsController =
-        TextEditingController(text: meeting.maxParticipants.toString());
-    _hostReasonController = TextEditingController(text: meeting.hostReason ?? '');
+    _maxParticipantsController = TextEditingController(
+      text: meeting.maxParticipants.toString(),
+    );
+    _hostReasonController = TextEditingController(
+      text: meeting.hostReason ?? '',
+    );
     _meetingDate = meeting.meetingDate.toLocal();
     _status = meeting.status;
   }
@@ -72,7 +72,8 @@ class _EditMeetingScreenState extends State<EditMeetingScreen> {
   Future<void> _save() async {
     final title = _titleController.text.trim();
     final location = _locationController.text.trim();
-    final maxParticipants = int.tryParse(_maxParticipantsController.text.trim()) ?? 0;
+    final maxParticipants =
+        int.tryParse(_maxParticipantsController.text.trim()) ?? 0;
     final hostReason = _hostReasonController.text.trim();
 
     if (title.isEmpty) {
@@ -122,9 +123,7 @@ class _EditMeetingScreenState extends State<EditMeetingScreen> {
     final book = widget.meeting.book;
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('모임 수정'),
-      ),
+      appBar: AppBar(title: const Text('모임 수정')),
       body: ListView(
         padding: const EdgeInsets.all(20),
         children: [
@@ -154,7 +153,7 @@ class _EditMeetingScreenState extends State<EditMeetingScreen> {
           ),
           const SizedBox(height: 12),
           DropdownButtonFormField<String>(
-            value: _status,
+            initialValue: _status,
             items: _statusOptions
                 .map(
                   (status) => DropdownMenuItem<String>(

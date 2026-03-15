@@ -1,34 +1,31 @@
+import 'dart:convert';
+
+import 'package:http/http.dart' as http;
+import 'package:reading_moments_app/core/env.dart';
 import 'package:reading_moments_app/core/supabase_client.dart';
 import 'package:reading_moments_app/models/meeting_model.dart';
 import 'package:reading_moments_app/models/participant_item.dart';
 
 class MeetingsService {
-  Future<List<MeetingModel>> loadMeetings() async {
-    final rows = await supabase
-        .from('meetings')
-        .select('''
-          id,
-          host_id,
-          book_id,
-          title,
-          meeting_date,
-          location,
-          max_participants,
-          status,
-          host_reason,
-          created_at,
-          books (
-            id,
-            isbn,
-            title,
-            author,
-            cover_url,
-            category
-          )
-        ''')
-        .order('meeting_date', ascending: true);
+  String get _baseUrl => apiBaseUrl;
 
-    return (rows as List)
+  Future<List<MeetingModel>> loadMeetings() async {
+    final userId = supabase.auth.currentUser?.id;
+    if (userId == null) {
+      throw Exception('로그인이 필요합니다.');
+    }
+
+    final uri = Uri.parse('$_baseUrl/meetings?userId=$userId');
+    final response = await http.get(uri);
+
+    if (response.statusCode != 200) {
+      throw Exception('모임 목록 조회 실패 (${response.statusCode}) ${response.body}');
+    }
+
+    final decoded = jsonDecode(response.body) as Map<String, dynamic>;
+    final items = (decoded['items'] as List? ?? []);
+
+    return items
         .map((e) => MeetingModel.fromJson(Map<String, dynamic>.from(e)))
         .toList();
   }
@@ -63,14 +60,17 @@ class MeetingsService {
     required String hostReason,
     required String status,
   }) async {
-    await supabase.from('meetings').update({
-      'title': title,
-      'meeting_date': meetingDate.toUtc().toIso8601String(),
-      'location': location.isEmpty ? null : location,
-      'max_participants': maxParticipants,
-      'host_reason': hostReason.isEmpty ? null : hostReason,
-      'status': status,
-    }).eq('id', meetingId);
+    await supabase
+        .from('meetings')
+        .update({
+          'title': title,
+          'meeting_date': meetingDate.toUtc().toIso8601String(),
+          'location': location.isEmpty ? null : location,
+          'max_participants': maxParticipants,
+          'host_reason': hostReason.isEmpty ? null : hostReason,
+          'status': status,
+        })
+        .eq('id', meetingId);
   }
 
   Future<void> deleteMeeting(int meetingId) async {
@@ -115,103 +115,76 @@ class MeetingsService {
     required int meetingId,
     required String userId,
   }) async {
-    await supabase.from('meeting_participants').upsert({
-      'meeting_id': meetingId,
-      'user_id': userId,
-      'status': 'requested',
-      'requested_at': DateTime.now().toUtc().toIso8601String(),
-    });
+    final uri = Uri.parse('$_baseUrl/meetings/$meetingId/apply');
+
+    final response = await http.post(
+      uri,
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({'userId': userId}),
+    );
+
+    if (response.statusCode != 200) {
+      throw Exception('참여 신청 실패 (${response.statusCode}) ${response.body}');
+    }
   }
 
-  Future<void> approveParticipant(int participantId) async {
-    await supabase.from('meeting_participants').update({
-      'status': 'approved',
-      'approved_at': DateTime.now().toUtc().toIso8601String(),
-    }).eq('id', participantId);
+  Future<void> approveParticipant({
+    required int meetingId,
+    required String participantUserId,
+    required String hostUserId,
+  }) async {
+    final uri = Uri.parse('$_baseUrl/meetings/$meetingId/approve');
+
+    final response = await http.post(
+      uri,
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'participantUserId': participantUserId,
+        'hostUserId': hostUserId,
+      }),
+    );
+
+    if (response.statusCode != 200) {
+      throw Exception('승인 실패 (${response.statusCode}) ${response.body}');
+    }
   }
 
-  Future<void> rejectParticipant(int participantId) async {
-    await supabase.from('meeting_participants').update({
-      'status': 'rejected',
-    }).eq('id', participantId);
+  Future<void> rejectParticipant({
+    required int meetingId,
+    required String participantUserId,
+    required String hostUserId,
+  }) async {
+    final uri = Uri.parse('$_baseUrl/meetings/$meetingId/reject');
+
+    final response = await http.post(
+      uri,
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'participantUserId': participantUserId,
+        'hostUserId': hostUserId,
+      }),
+    );
+
+    if (response.statusCode != 200) {
+      throw Exception('거절 실패 (${response.statusCode}) ${response.body}');
+    }
   }
 
   Future<List<MeetingModel>> loadLibraryMeetings(String userId) async {
-    final hostedRows = await supabase
-        .from('meetings')
-        .select('''
-          id,
-          host_id,
-          book_id,
-          title,
-          meeting_date,
-          location,
-          max_participants,
-          status,
-          host_reason,
-          created_at,
-          books (
-            id,
-            isbn,
-            title,
-            author,
-            cover_url,
-            category
-          )
-        ''')
-        .eq('host_id', userId);
+    final uri = Uri.parse('$_baseUrl/meetings/my-active?userId=$userId');
+    final response = await http.get(uri);
 
-    final participantRows = await supabase
-        .from('meeting_participants')
-        .select('meeting_id')
-        .eq('user_id', userId)
-        .eq('status', 'approved');
-
-    final participantMeetingIds =
-        (participantRows as List).map((e) => e['meeting_id'] as int).toSet().toList();
-
-    List<dynamic> approvedRows = [];
-    if (participantMeetingIds.isNotEmpty) {
-      approvedRows = await supabase
-          .from('meetings')
-          .select('''
-            id,
-            host_id,
-            book_id,
-            title,
-            meeting_date,
-            location,
-            max_participants,
-            status,
-            host_reason,
-            created_at,
-            books (
-              id,
-              isbn,
-              title,
-              author,
-              cover_url,
-              category
-            )
-          ''')
-          .inFilter('id', participantMeetingIds);
+    if (response.statusCode != 200) {
+      throw Exception(
+        '진행중인 모임 조회 실패 (${response.statusCode}) ${response.body}',
+      );
     }
 
-    final map = <int, MeetingModel>{};
+    final decoded = jsonDecode(response.body) as Map<String, dynamic>;
+    final items = (decoded['items'] as List? ?? []);
 
-    for (final row in hostedRows as List) {
-      final m = MeetingModel.fromJson(Map<String, dynamic>.from(row));
-      map[m.id] = m;
-    }
-
-    for (final row in approvedRows) {
-      final m = MeetingModel.fromJson(Map<String, dynamic>.from(row));
-      map[m.id] = m;
-    }
-
-    final list = map.values.toList()
-      ..sort((a, b) => b.meetingDate.compareTo(a.meetingDate));
-
-    return list;
+    return items
+        .map((e) => MeetingModel.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
   }
 }

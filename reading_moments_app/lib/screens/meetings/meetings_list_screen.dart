@@ -5,18 +5,17 @@ import 'package:reading_moments_app/models/meeting_model.dart';
 import 'package:reading_moments_app/models/test_account.dart';
 import 'package:reading_moments_app/screens/auth/login_screen.dart';
 import 'package:reading_moments_app/screens/auth/profile_bootstrap_screen.dart';
+import 'package:reading_moments_app/screens/feed/feed_screen.dart';
 import 'package:reading_moments_app/screens/library/my_library_screen.dart';
 import 'package:reading_moments_app/screens/meetings/create_meeting_screen.dart';
 import 'package:reading_moments_app/screens/meetings/edit_meeting_screen.dart';
 import 'package:reading_moments_app/screens/meetings/meeting_detail_screen.dart';
+import 'package:reading_moments_app/screens/records/my_records_screen.dart';
 import 'package:reading_moments_app/services/meetings_service.dart';
 import 'package:reading_moments_app/utils/app_utils.dart';
+import 'package:reading_moments_app/widgets/current_user_banner.dart';
 
-enum MeetingsFilterType {
-  activeAll,
-  hostedByMe,
-  archived,
-}
+enum MeetingsFilterType { activeAll, hostedByMe, archived }
 
 class MeetingsListScreen extends StatefulWidget {
   const MeetingsListScreen({super.key});
@@ -88,10 +87,14 @@ class _MeetingsListScreenState extends State<MeetingsListScreen> {
     return status == 'closed' || status == 'finished';
   }
 
+  bool _isActiveStatus(String status) {
+    return status == 'open' || status == 'in_progress';
+  }
+
   List<MeetingModel> _getFilteredMeetings(String? currentUid) {
     switch (_filterType) {
       case MeetingsFilterType.activeAll:
-        return _meetings.where((m) => m.status == 'open').toList();
+        return _meetings.where((m) => _isActiveStatus(m.status)).toList();
 
       case MeetingsFilterType.hostedByMe:
         if (currentUid == null) return [];
@@ -122,37 +125,57 @@ class _MeetingsListScreenState extends State<MeetingsListScreen> {
       case 'finished':
         return scheme.secondaryContainer.withValues(alpha: 0.7);
       case 'open':
+      case 'in_progress':
       default:
         return null;
     }
   }
 
-  Color _getStatusColor(String status) {
-    switch (status) {
+  Color _getStatusColor(MeetingModel meeting) {
+    final badge = meeting.badgeText ?? '';
+
+    switch (badge) {
+      case '신청중':
+        return Colors.orange;
+      case '참여중':
+        return Colors.green;
+      case '거절됨':
+        return Colors.red;
+    }
+
+    switch (meeting.status) {
       case 'closed':
         return Colors.orange;
       case 'finished':
         return Colors.green;
+      case 'in_progress':
+        return Colors.teal;
       case 'open':
       default:
         return Colors.blue;
     }
   }
 
-  String _getStatusLabel(String status) {
-    switch (status) {
+  String _getStatusLabel(MeetingModel meeting) {
+    if (meeting.badgeText != null && meeting.badgeText!.trim().isNotEmpty) {
+      return meeting.badgeText!;
+    }
+
+    switch (meeting.status) {
       case 'closed':
         return '마감';
       case 'finished':
         return '종료';
+      case 'in_progress':
+        return '진행중';
       case 'open':
       default:
         return '모집중';
     }
   }
 
-  Widget _buildStatusChip(String status) {
-    final color = _getStatusColor(status);
+  Widget _buildStatusChip(MeetingModel meeting) {
+    final color = _getStatusColor(meeting);
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
@@ -161,11 +184,8 @@ class _MeetingsListScreenState extends State<MeetingsListScreen> {
         borderRadius: BorderRadius.circular(999),
       ),
       child: Text(
-        _getStatusLabel(status),
-        style: TextStyle(
-          color: color,
-          fontWeight: FontWeight.w600,
-        ),
+        _getStatusLabel(meeting),
+        style: TextStyle(color: color, fontWeight: FontWeight.w600),
       ),
     );
   }
@@ -204,9 +224,7 @@ class _MeetingsListScreenState extends State<MeetingsListScreen> {
   Future<void> _editMeeting(MeetingModel meeting) async {
     final updated = await Navigator.push<bool>(
       context,
-      MaterialPageRoute(
-        builder: (_) => EditMeetingScreen(meeting: meeting),
-      ),
+      MaterialPageRoute(builder: (_) => EditMeetingScreen(meeting: meeting)),
     );
 
     if (updated == true) {
@@ -263,14 +281,8 @@ class _MeetingsListScreenState extends State<MeetingsListScreen> {
         }
       },
       itemBuilder: (context) => const [
-        PopupMenuItem(
-          value: 'edit',
-          child: Text('수정'),
-        ),
-        PopupMenuItem(
-          value: 'delete',
-          child: Text('삭제'),
-        ),
+        PopupMenuItem(value: 'edit', child: Text('수정')),
+        PopupMenuItem(value: 'delete', child: Text('삭제')),
       ],
     );
   }
@@ -312,7 +324,7 @@ class _MeetingsListScreenState extends State<MeetingsListScreen> {
                     ),
                   ),
                   const SizedBox(width: 8),
-                  _buildStatusChip(meeting.status),
+                  _buildStatusChip(meeting),
                   if (isHost) ...[
                     const SizedBox(width: 4),
                     _buildHostMenu(meeting, isHost)!,
@@ -321,7 +333,9 @@ class _MeetingsListScreenState extends State<MeetingsListScreen> {
               ),
               const SizedBox(height: 10),
               if (meeting.book != null)
-                Text('책: ${meeting.book!.title} / ${meeting.book!.author ?? "-"}'),
+                Text(
+                  '책: ${meeting.book!.title} / ${meeting.book!.author ?? "-"}',
+                ),
               Text('일시: ${formatDateTime(meeting.meetingDate)}'),
               Text('장소: ${meeting.location ?? "-"}'),
               if (meeting.hostReason != null &&
@@ -356,6 +370,26 @@ class _MeetingsListScreenState extends State<MeetingsListScreen> {
             onPressed: () async {
               await Navigator.push(
                 context,
+                MaterialPageRoute(builder: (_) => const FeedScreen()),
+              );
+            },
+            icon: const Icon(Icons.dynamic_feed),
+            tooltip: '공개 피드',
+          ),
+          IconButton(
+            onPressed: () async {
+              await Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const MyRecordsScreen()),
+              );
+            },
+            icon: const Icon(Icons.edit_note),
+            tooltip: '내 기록',
+          ),
+          IconButton(
+            onPressed: () async {
+              await Navigator.push(
+                context,
                 MaterialPageRoute(builder: (_) => const MyLibraryScreen()),
               );
             },
@@ -376,7 +410,10 @@ class _MeetingsListScreenState extends State<MeetingsListScreen> {
               const PopupMenuItem(value: 'logout', child: Text('로그아웃')),
               const PopupMenuDivider(),
               ...kTestAccounts.map(
-                (a) => PopupMenuItem(value: a.label, child: Text('${a.label}로 전환')),
+                (a) => PopupMenuItem(
+                  value: a.label,
+                  child: Text('${a.label}로 전환'),
+                ),
               ),
             ],
           ),
@@ -384,25 +421,28 @@ class _MeetingsListScreenState extends State<MeetingsListScreen> {
       ),
       body: Column(
         children: [
+          const CurrentUserBanner(),
           _buildFilterSection(),
           Expanded(
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
                 : filteredMeetings.isEmpty
-                    ? Center(child: Text(_getEmptyMessage()))
-                    : RefreshIndicator(
-                        onRefresh: _loadMeetings,
-                        child: ListView.builder(
-                          itemCount: filteredMeetings.length,
-                          itemBuilder: (context, i) {
-                            final meeting = filteredMeetings[i];
-                            final isHost =
-                                currentUid != null && currentUid == meeting.hostId;
+                ? Center(child: Text(_getEmptyMessage()))
+                : RefreshIndicator(
+                    onRefresh: _loadMeetings,
+                    child: ListView.builder(
+                      itemCount: filteredMeetings.length,
+                      itemBuilder: (context, i) {
+                        final meeting = filteredMeetings[i];
+                        final isHost =
+                            meeting.isHost ||
+                            (currentUid != null &&
+                                currentUid == meeting.hostId);
 
-                            return _buildMeetingCard(context, meeting, isHost);
-                          },
-                        ),
-                      ),
+                        return _buildMeetingCard(context, meeting, isHost);
+                      },
+                    ),
+                  ),
           ),
         ],
       ),
@@ -414,7 +454,7 @@ class _MeetingsListScreenState extends State<MeetingsListScreen> {
           );
           _loadMeetings();
         },
-        label: const Text('모임 만들기'),
+        label: const Text('책 고르기'),
         icon: const Icon(Icons.add),
       ),
     );
