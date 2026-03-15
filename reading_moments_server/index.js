@@ -11,7 +11,8 @@ app.use(cors());
 app.use(express.json());
 
 // ====== Config ======
-const API_KEY = process.env.GEMINI_API_KEY;
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const GOOGLE_BOOKS_API_KEY = process.env.GOOGLE_BOOKS_API_KEY;
 const PORT = Number(process.env.PORT || 3000);
 
 const RAW_MODEL = (process.env.GEMINI_MODEL || "gemini-2.5-flash").trim();
@@ -23,8 +24,11 @@ const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/${MODEL_NAM
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-if (!API_KEY) {
+if (!GEMINI_API_KEY) {
   console.error("❌ GEMINI_API_KEY가 설정되어 있지 않습니다(.env 확인).");
+}
+if (!GOOGLE_BOOKS_API_KEY) {
+  console.error("❌ GOOGLE_BOOKS_API_KEY가 설정되어 있지 않습니다(.env 확인).");
 }
 if (!SUPABASE_URL) {
   console.error("❌ SUPABASE_URL이 설정되어 있지 않습니다(.env 확인).");
@@ -118,6 +122,67 @@ function normalizeGoogleBook(item) {
   };
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableGoogleError(error) {
+  const status = error.response?.status;
+  const code = error.code;
+
+  return (
+    status === 503 ||
+    status === 502 ||
+    code === "ECONNABORTED" ||
+    code === "ECONNRESET" ||
+    code === "ETIMEDOUT"
+  );
+}
+
+async function fetchGoogleBooksWithRetry(params, maxRetries = 2) {
+  let attempt = 0;
+  let lastError;
+
+  while (attempt <= maxRetries) {
+    try {
+      const response = await axios.get(
+        "https://www.googleapis.com/books/v1/volumes",
+        {
+          params,
+          timeout: 15000,
+        }
+      );
+      return response;
+    } catch (error) {
+      lastError = error;
+
+      const status = error.response?.status;
+      const body = error.response?.data;
+      const code = error.code;
+
+      console.warn(
+        `⚠️ Google Books request failed (attempt ${attempt + 1}/${maxRetries + 1})`,
+        {
+          status,
+          code,
+          message: error.message,
+          body: body ? JSON.stringify(body).slice(0, 300) : undefined,
+        }
+      );
+
+      if (!isRetryableGoogleError(error) || attempt === maxRetries) {
+        throw error;
+      }
+
+      const waitMs = 500 * (attempt + 1);
+      await sleep(waitMs);
+      attempt += 1;
+    }
+  }
+
+  throw lastError;
+}
+
 async function generatePlainTextFromGemini(prompt) {
   const response = await axios.post(
     GEMINI_URL,
@@ -130,7 +195,7 @@ async function generatePlainTextFromGemini(prompt) {
     {
       headers: {
         "Content-Type": "application/json",
-        "x-goog-api-key": API_KEY,
+        "x-goog-api-key": GEMINI_API_KEY,
       },
       timeout: 30000,
     }
@@ -162,7 +227,7 @@ async function generateQuestionsFromGemini({ bookTitle, author }) {
     {
       headers: {
         "Content-Type": "application/json",
-        "x-goog-api-key": API_KEY,
+        "x-goog-api-key": GEMINI_API_KEY,
       },
       timeout: 20000,
     }
@@ -310,6 +375,65 @@ async function insertQuestions({ meetingId, hostUserId, questions }) {
   return data;
 }
 
+// ====== Meeting Status Helpers ======
+function mapMeetingStatusToLabel(status) {
+  switch (status) {
+    case "open":
+      return "모집중";
+    case "in_progress":
+      return "진행중";
+    case "closed":
+      return "종료";
+    default:
+      return "";
+  }
+}
+
+function mapParticipationStatusToLabel(status) {
+  switch (status) {
+    case "pending":
+      return "신청중";
+    case "approved":
+      return "참여중";
+    case "rejected":
+      return "거절됨";
+    default:
+      return null;
+  }
+}
+
+function buildMeetingBadge({ isHost, participationStatus, meetingStatus }) {
+  if (isHost) return "참여중";
+
+  const participationLabel = mapParticipationStatusToLabel(participationStatus);
+  if (participationLabel) return participationLabel;
+
+  return mapMeetingStatusToLabel(meetingStatus);
+}
+
+function normalizeMeetingRow(row, participantRow, currentUserId) {
+  const isHost = !!currentUserId && row.host_id === currentUserId;
+  const participationStatus = participantRow ? participantRow.status : null;
+
+  return {
+    id: row.id,
+    title: row.title,
+    host_id: row.host_id,
+    book_id: row.book_id,
+    meeting_date: row.meeting_date,
+    location: row.location,
+    status: row.status,
+    created_at: row.created_at,
+    participation_status: participationStatus,
+    is_host: isHost,
+    badge_text: buildMeetingBadge({
+      isHost,
+      participationStatus,
+      meetingStatus: row.status,
+    }),
+  };
+}
+
 // ====== Routes ======
 app.post("/books/generate-description", async (req, res) => {
   const { title, author, publisher, publishedDate } = req.body || {};
@@ -318,7 +442,7 @@ app.post("/books/generate-description", async (req, res) => {
     return res.status(400).json({ error: "title은 필수입니다." });
   }
 
-  if (!API_KEY) {
+  if (!GEMINI_API_KEY) {
     return res.status(500).json({ error: "GEMINI_API_KEY가 설정되어 있지 않습니다." });
   }
 
@@ -347,7 +471,7 @@ app.post("/books/generate-reason", async (req, res) => {
     return res.status(400).json({ error: "title은 필수입니다." });
   }
 
-  if (!API_KEY) {
+  if (!GEMINI_API_KEY) {
     return res.status(500).json({ error: "GEMINI_API_KEY가 설정되어 있지 않습니다." });
   }
 
@@ -374,7 +498,7 @@ app.post("/generate-questions", async (req, res) => {
     });
   }
 
-  if (!API_KEY) {
+  if (!GEMINI_API_KEY) {
     return res.status(500).json({ error: "GEMINI_API_KEY가 설정되어 있지 않습니다." });
   }
 
@@ -422,7 +546,7 @@ app.get("/meetings/:meetingId/questions", async (req, res) => {
       .from("questions")
       .select("id, meeting_id, created_by, question, created_at")
       .eq("meeting_id", meetingId)
-      .order("created_at", { ascending: true});
+      .order("created_at", { ascending: true });
 
     if (error) throw error;
 
@@ -509,6 +633,311 @@ app.get("/meetings/:meetingId/recaps", async (req, res) => {
   }
 });
 
+// ======================================================
+// 추가 1. 전체 모임 리스트 조회 + 내 참여 상태 포함
+// GET /meetings?userId=xxx
+// ======================================================
+app.get("/meetings", async (req, res) => {
+  const userId = String(req.query.userId || "").trim();
+
+  try {
+    const { data: meetings, error: meetingsError } = await supabaseAdmin
+      .from("meetings")
+      .select("id, title, host_id, book_id, meeting_date, location, status, created_at")
+      .order("created_at", { ascending: false });
+
+    if (meetingsError) throw meetingsError;
+
+    let participantMap = {};
+
+    if (userId) {
+      const { data: participantRows, error: participantError } = await supabaseAdmin
+        .from("meeting_participants")
+        .select("meeting_id, user_id, status")
+        .eq("user_id", userId);
+
+      if (participantError) throw participantError;
+
+      participantMap = (participantRows || []).reduce((acc, item) => {
+        acc[item.meeting_id] = item;
+        return acc;
+      }, {});
+    }
+
+    const items = (meetings || []).map((row) =>
+      normalizeMeetingRow(row, participantMap[row.id] || null, userId)
+    );
+
+    return res.json({
+      ok: true,
+      items,
+    });
+  } catch (e) {
+    const msg = e?.message || String(e);
+    console.error("❌ meetings list error:", msg);
+    return res.status(500).json({
+      error: "meetings list failed",
+      details: msg,
+    });
+  }
+});
+
+// ======================================================
+// 추가 2. 모임 참여 신청
+// POST /meetings/:meetingId/apply
+// body: { userId }
+// ======================================================
+app.post("/meetings/:meetingId/apply", async (req, res) => {
+  const meetingId = Number(req.params.meetingId);
+  const { userId } = req.body || {};
+
+  if (!meetingId || !userId) {
+    return res.status(400).json({
+      error: "meetingId, userId는 필수입니다.",
+    });
+  }
+
+  try {
+    const { data: meeting, error: meetingError } = await supabaseAdmin
+      .from("meetings")
+      .select("id, host_id, status")
+      .eq("id", meetingId)
+      .single();
+
+    if (meetingError) throw meetingError;
+    if (!meeting) {
+      return res.status(404).json({ error: "모임을 찾을 수 없습니다." });
+    }
+
+    if (meeting.host_id === userId) {
+      return res.status(400).json({
+        error: "호스트는 본인 모임에 참여 신청할 수 없습니다.",
+      });
+    }
+
+    if (meeting.status === "closed") {
+      return res.status(400).json({
+        error: "종료된 모임에는 참여 신청할 수 없습니다.",
+      });
+    }
+
+    const { data: existing, error: existingError } = await supabaseAdmin
+      .from("meeting_participants")
+      .select("id, meeting_id, user_id, status")
+      .eq("meeting_id", meetingId)
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    if (existingError) throw existingError;
+
+    if (existing) {
+      return res.status(400).json({
+        error: "이미 신청 또는 처리 이력이 있습니다.",
+        item: existing,
+      });
+    }
+
+    const { data: inserted, error: insertError } = await supabaseAdmin
+      .from("meeting_participants")
+      .insert([
+        {
+          meeting_id: meetingId,
+          user_id: userId,
+          status: "pending",
+        },
+      ])
+      .select("id, meeting_id, user_id, status")
+      .single();
+
+    if (insertError) throw insertError;
+
+    return res.json({
+      ok: true,
+      message: "참여 신청이 완료되었습니다.",
+      item: inserted,
+    });
+  } catch (e) {
+    const msg = e?.message || String(e);
+    console.error("❌ meeting apply error:", msg);
+    return res.status(500).json({
+      error: "meeting apply failed",
+      details: msg,
+    });
+  }
+});
+
+// ======================================================
+// 추가 3. 호스트 승인
+// POST /meetings/:meetingId/approve
+// body: { participantUserId, hostUserId }
+// ======================================================
+app.post("/meetings/:meetingId/approve", async (req, res) => {
+  const meetingId = Number(req.params.meetingId);
+  const { participantUserId, hostUserId } = req.body || {};
+
+  if (!meetingId || !participantUserId || !hostUserId) {
+    return res.status(400).json({
+      error: "meetingId, participantUserId, hostUserId는 필수입니다.",
+    });
+  }
+
+  try {
+    await assertHost({ meetingId, hostUserId });
+
+    const { data: updated, error: updateError } = await supabaseAdmin
+      .from("meeting_participants")
+      .update({
+        status: "approved",
+        updated_at: new Date().toISOString(),
+      })
+      .eq("meeting_id", meetingId)
+      .eq("user_id", participantUserId)
+      .select("id, meeting_id, user_id, status, created_at, updated_at")
+      .single();
+
+    if (updateError) throw updateError;
+
+    return res.json({
+      ok: true,
+      message: "참여 신청이 승인되었습니다.",
+      item: updated,
+    });
+  } catch (e) {
+    const msg = e?.message || String(e);
+    console.error("❌ meeting approve error:", msg);
+    return res.status(500).json({
+      error: "meeting approve failed",
+      details: msg,
+    });
+  }
+});
+
+// ======================================================
+// 추가 4. 호스트 거절
+// POST /meetings/:meetingId/reject
+// body: { participantUserId, hostUserId }
+// ======================================================
+app.post("/meetings/:meetingId/reject", async (req, res) => {
+  const meetingId = Number(req.params.meetingId);
+  const { participantUserId, hostUserId } = req.body || {};
+
+  if (!meetingId || !participantUserId || !hostUserId) {
+    return res.status(400).json({
+      error: "meetingId, participantUserId, hostUserId는 필수입니다.",
+    });
+  }
+
+  try {
+    await assertHost({ meetingId, hostUserId });
+
+    const { data: updated, error: updateError } = await supabaseAdmin
+      .from("meeting_participants")
+      .update({
+        status: "rejected",
+        updated_at: new Date().toISOString(),
+      })
+      .eq("meeting_id", meetingId)
+      .eq("user_id", participantUserId)
+      .select("id, meeting_id, user_id, status, created_at, updated_at")
+      .single();
+
+    if (updateError) throw updateError;
+
+    return res.json({
+      ok: true,
+      message: "참여 신청이 거절되었습니다.",
+      item: updated,
+    });
+  } catch (e) {
+    const msg = e?.message || String(e);
+    console.error("❌ meeting reject error:", msg);
+    return res.status(500).json({
+      error: "meeting reject failed",
+      details: msg,
+    });
+  }
+});
+
+// ======================================================
+// 추가 5. 진행중인 모임 조회
+// GET /meetings/my-active?userId=xxx
+// 조건:
+// - 내가 host 이거나
+// - meeting_participants.status = approved
+// - meetings.status != closed
+// ======================================================
+app.get("/meetings/my-active", async (req, res) => {
+  const userId = String(req.query.userId || "").trim();
+
+  if (!userId) {
+    return res.status(400).json({
+      error: "userId는 필수입니다.",
+    });
+  }
+
+  try {
+    const { data: hostMeetings, error: hostError } = await supabaseAdmin
+      .from("meetings")
+      .select("id, title, host_id, book_id, meeting_date, location, status, created_at")
+      .eq("host_id", userId)
+      .neq("status", "closed")
+      .order("created_at", { ascending: false });
+
+    if (hostError) throw hostError;
+
+    const { data: approvedParticipants, error: participantError } = await supabaseAdmin
+      .from("meeting_participants")
+      .select("meeting_id, user_id, status")
+      .eq("user_id", userId)
+      .eq("status", "approved");
+
+    if (participantError) throw participantError;
+
+    const approvedMeetingIds = (approvedParticipants || []).map((x) => x.meeting_id);
+
+    let approvedMeetings = [];
+    if (approvedMeetingIds.length > 0) {
+      const { data, error } = await supabaseAdmin
+        .from("meetings")
+        .select("id, title, host_id, book_id, meeting_date, location, status, created_at")
+        .in("id", approvedMeetingIds)
+        .neq("status", "closed")
+        .order("created_at", { ascending: false });
+
+      if (error) throw error;
+      approvedMeetings = data || [];
+    }
+
+    const mergedMap = {};
+
+    for (const row of hostMeetings || []) {
+      mergedMap[row.id] = normalizeMeetingRow(row, { status: "approved" }, userId);
+    }
+
+    for (const row of approvedMeetings || []) {
+      if (!mergedMap[row.id]) {
+        mergedMap[row.id] = normalizeMeetingRow(row, { status: "approved" }, userId);
+      }
+    }
+
+    const items = Object.values(mergedMap).sort((a, b) => {
+      return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+    });
+
+    return res.json({
+      ok: true,
+      items,
+    });
+  } catch (e) {
+    const msg = e?.message || String(e);
+    console.error("❌ my-active meetings error:", msg);
+    return res.status(500).json({
+      error: "my-active meetings failed",
+      details: msg,
+    });
+  }
+});
+
 app.get("/books/search", async (req, res) => {
   const q = String(req.query.q || "").trim();
   if (!q) {
@@ -544,14 +973,21 @@ app.get("/books/search", async (req, res) => {
       });
     }
 
+    if (!GOOGLE_BOOKS_API_KEY) {
+      return res.json({
+        ok: true,
+        source: "local-only-no-google-key",
+        books: normalizedLocalBooks,
+        warning: "GOOGLE_BOOKS_API_KEY is missing",
+      });
+    }
+
     try {
-      const response = await axios.get("https://www.googleapis.com/books/v1/volumes", {
-        params: {
-          q,
-          langRestrict: "ko",
-          maxResults: 10,
-        },
-        timeout: 15000,
+      const response = await fetchGoogleBooksWithRetry({
+        q,
+        langRestrict: "ko",
+        maxResults: 10,
+        key: GOOGLE_BOOKS_API_KEY,
       });
 
       const items = Array.isArray(response.data?.items) ? response.data.items : [];
@@ -582,6 +1018,13 @@ app.get("/books/search", async (req, res) => {
       });
     } catch (googleError) {
       const status = googleError.response?.status;
+      const body = googleError.response?.data;
+
+      console.error(
+        "❌ Google Books final error:",
+        status,
+        JSON.stringify(body || googleError.message).slice(0, 1000)
+      );
 
       if (status === 429) {
         console.warn("⚠️ Google Books quota exceeded. local fallback only.");
@@ -593,7 +1036,23 @@ app.get("/books/search", async (req, res) => {
         });
       }
 
-      throw googleError;
+      if (status === 403 || status === 400 || status === 503 || status === 502) {
+        return res.json({
+          ok: true,
+          source: "local-fallback-google-error",
+          books: normalizedLocalBooks,
+          warning: "Google Books request failed",
+          googleStatus: status,
+          googleError: body || googleError.message,
+        });
+      }
+
+      return res.json({
+        ok: true,
+        source: "local-fallback-unknown-google-error",
+        books: normalizedLocalBooks,
+        warning: "Unknown Google Books error",
+      });
     }
   } catch (e) {
     const msg = e.response?.data || e.message;
