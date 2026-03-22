@@ -1,6 +1,10 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../core/log/app_logger.dart';
+import '../../core/log/logged_state_mixin.dart';
 import '../../core/supabase_client.dart';
 import '../../models/test_account.dart';
 import '../../utils/app_utils.dart';
@@ -13,26 +17,50 @@ class LoginScreen extends StatefulWidget {
   State<LoginScreen> createState() => _LoginScreenState();
 }
 
-class _LoginScreenState extends State<LoginScreen> {
+class _LoginScreenState extends State<LoginScreen>
+    with LoggedStateMixin<LoginScreen> {
   final _email = TextEditingController();
   final _pw = TextEditingController();
   bool _loading = false;
 
+  @override
+  String get screenName => 'LoginScreen';
+
   String _normalizeEmail(String v) => v.trim().toLowerCase();
+
+  Future<void> _debugNetworkCheck() async {
+    try {
+      final result = await InternetAddress.lookup(
+        'vwafwoekgficrlrecqvx.supabase.co',
+      );
+      AppLogger.info('DNS lookup success: $result');
+    } catch (e) {
+      AppLogger.warn('DNS lookup failed: $e');
+    }
+  }
 
   Future<void> _signUp() async {
     setState(() => _loading = true);
     try {
+      AppLogger.action(
+        'SignUp',
+        detail: 'email=${_normalizeEmail(_email.text)}',
+      );
+      await _debugNetworkCheck();
+
       await supabase.auth.signUp(
         email: _normalizeEmail(_email.text),
         password: _pw.text.trim(),
       );
+
       if (!mounted) return;
       showToast(context, '회원가입 완료');
-    } on AuthException catch (e) {
+    } on AuthException catch (e, st) {
+      AppLogger.apiError('signUp', e, stackTrace: st);
       if (!mounted) return;
       showToast(context, '회원가입 실패: ${e.message}');
-    } catch (e) {
+    } catch (e, st) {
+      AppLogger.apiError('signUp', e, stackTrace: st);
       if (!mounted) return;
       showToast(context, '회원가입 실패: $e');
     } finally {
@@ -43,19 +71,28 @@ class _LoginScreenState extends State<LoginScreen> {
   Future<void> _signIn() async {
     setState(() => _loading = true);
     try {
+      AppLogger.action(
+        'SignIn',
+        detail: 'email=${_normalizeEmail(_email.text)}',
+      );
+      await _debugNetworkCheck();
+
       await supabase.auth.signInWithPassword(
         email: _normalizeEmail(_email.text),
         password: _pw.text.trim(),
       );
+
       if (!mounted) return;
       Navigator.pushReplacement(
         context,
-        MaterialPageRoute(builder: (_) => ProfileBootstrapScreen()),
+        MaterialPageRoute(builder: (_) => const ProfileBootstrapScreen()),
       );
-    } on AuthException catch (e) {
+    } on AuthException catch (e, st) {
+      AppLogger.apiError('signIn', e, stackTrace: st);
       if (!mounted) return;
       showToast(context, '로그인 실패: ${e.message}');
-    } catch (e) {
+    } catch (e, st) {
+      AppLogger.apiError('signIn', e, stackTrace: st);
       if (!mounted) return;
       showToast(context, '로그인 실패: $e');
     } finally {
@@ -66,21 +103,30 @@ class _LoginScreenState extends State<LoginScreen> {
   Future<void> _quickLogin(TestAccount acc) async {
     setState(() => _loading = true);
     try {
+      AppLogger.action(
+        'QuickLogin',
+        detail: 'email=${_normalizeEmail(acc.email)}',
+      );
+      await _debugNetworkCheck();
+
       await supabase.auth.signOut();
       await supabase.auth.signInWithPassword(
         email: _normalizeEmail(acc.email),
         password: acc.password.trim(),
       );
+
       if (!mounted) return;
       showToast(context, '${acc.label} 로그인 완료');
       Navigator.pushReplacement(
         context,
-        MaterialPageRoute(builder: (_) => ProfileBootstrapScreen()),
+        MaterialPageRoute(builder: (_) => const ProfileBootstrapScreen()),
       );
-    } on AuthException catch (e) {
+    } on AuthException catch (e, st) {
+      AppLogger.apiError('quickLogin', e, stackTrace: st);
       if (!mounted) return;
       showToast(context, '빠른 로그인 실패: ${e.message}');
-    } catch (e) {
+    } catch (e, st) {
+      AppLogger.apiError('quickLogin', e, stackTrace: st);
       if (!mounted) return;
       showToast(context, '빠른 로그인 실패: $e');
     } finally {

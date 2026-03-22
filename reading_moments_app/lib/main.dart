@@ -12,6 +12,11 @@ Future<void> main() async {
   final supabaseUrl = dotenv.env['SUPABASE_URL'];
   final supabaseAnon = dotenv.env['SUPABASE_ANON_KEY'];
 
+  debugPrint('SUPABASE_URL=$supabaseUrl');
+  debugPrint(
+    'SUPABASE_ANON_KEY loaded=${supabaseAnon != null && supabaseAnon.isNotEmpty}',
+  );
+
   if (supabaseUrl == null ||
       supabaseUrl.isEmpty ||
       supabaseAnon == null ||

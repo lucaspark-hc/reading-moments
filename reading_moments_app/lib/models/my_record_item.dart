@@ -2,15 +2,20 @@ class MyRecordItem {
   final int id;
   final String userId;
   final int bookId;
+
   final String bookTitle;
   final String? bookAuthor;
   final String? coverUrl;
+
   final String type;
+
   final String? quoteText;
+  final String? explainText;
   final String? noteText;
   final String visibility;
   final int? page;
   final DateTime createdAt;
+  final DateTime? updatedAt;
 
   MyRecordItem({
     required this.id,
@@ -21,10 +26,12 @@ class MyRecordItem {
     required this.coverUrl,
     required this.type,
     required this.quoteText,
+    required this.explainText,
     required this.noteText,
     required this.visibility,
     required this.page,
     required this.createdAt,
+    required this.updatedAt,
   });
 
   factory MyRecordItem.fromMap(Map<String, dynamic> map) {
@@ -39,19 +46,24 @@ class MyRecordItem {
       coverUrl: bookMap?['cover_url'] as String?,
       type: (map['type'] ?? 'quote') as String,
       quoteText: map['quote_text'] as String?,
+      explainText: map['explain_text'] as String?,
       noteText: map['note_text'] as String?,
       visibility: (map['visibility'] ?? 'private') as String,
       page: map['page'] as int?,
       createdAt: DateTime.parse(map['created_at'] as String),
+      updatedAt: map['updated_at'] != null
+          ? DateTime.parse(map['updated_at'] as String)
+          : null,
     );
   }
 
   MyRecordItem copyWith({
-    String? type,
     String? quoteText,
+    String? explainText,
     String? noteText,
     String? visibility,
     int? page,
+    DateTime? updatedAt,
   }) {
     return MyRecordItem(
       id: id,
@@ -60,12 +72,14 @@ class MyRecordItem {
       bookTitle: bookTitle,
       bookAuthor: bookAuthor,
       coverUrl: coverUrl,
-      type: type ?? this.type,
+      type: type,
       quoteText: quoteText ?? this.quoteText,
+      explainText: explainText ?? this.explainText,
       noteText: noteText ?? this.noteText,
       visibility: visibility ?? this.visibility,
       page: page ?? this.page,
       createdAt: createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
     );
   }
 }

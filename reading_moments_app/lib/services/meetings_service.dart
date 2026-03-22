@@ -103,7 +103,7 @@ class MeetingsService {
           )
         ''')
         .eq('meeting_id', meetingId)
-        .eq('status', 'requested')
+        .inFilter('status', ['pending', 'requested'])
         .order('requested_at', ascending: true);
 
     return (rows as List)

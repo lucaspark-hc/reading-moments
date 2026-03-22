@@ -1,12 +1,24 @@
 import 'package:flutter/material.dart';
 
+import '../../core/log/app_logger.dart';
+import '../../core/log/logged_state_mixin.dart';
 import '../../models/book_feed_summary_item.dart';
+import '../../models/book_selection_item.dart';
 import '../../models/feed_note_item.dart';
+import '../../models/my_book_record_group_item.dart';
 import '../../models/public_book_selection_item.dart';
+import '../../models/wishlist_book_item.dart';
+import '../../screens/library/my_library_screen.dart';
+import '../../screens/records/book_records_screen.dart';
+import '../../screens/selections/book_selection_detail_screen.dart';
+import '../../services/book_selections_service.dart';
 import '../../services/feed_service.dart';
 import '../../services/library_service.dart';
+import '../../services/my_records_service.dart';
 import '../../utils/app_utils.dart';
 import 'feed_note_detail_screen.dart';
+
+enum _LibraryBookStatus { none, wishlist, selected, reading, done }
 
 class BookFeedDetailScreen extends StatefulWidget {
   final BookFeedSummaryItem summary;
@@ -20,9 +32,12 @@ class BookFeedDetailScreen extends StatefulWidget {
   State<BookFeedDetailScreen> createState() => _BookFeedDetailScreenState();
 }
 
-class _BookFeedDetailScreenState extends State<BookFeedDetailScreen> {
+class _BookFeedDetailScreenState extends State<BookFeedDetailScreen>
+    with LoggedStateMixin<BookFeedDetailScreen> {
   final FeedService _feedService = FeedService();
   final LibraryService _libraryService = LibraryService();
+  final BookSelectionsService _bookSelectionsService = BookSelectionsService();
+  final MyRecordsService _myRecordsService = MyRecordsService();
 
   bool _loading = true;
   bool _savingBook = false;
@@ -33,6 +48,9 @@ class _BookFeedDetailScreenState extends State<BookFeedDetailScreen> {
   List<FeedNoteItem> _noteItems = [];
 
   @override
+  String get screenName => 'BookFeedDetailScreen';
+
+  @override
   void initState() {
     super.initState();
     _isWishlisted = widget.summary.isWishlisted;
@@ -41,6 +59,11 @@ class _BookFeedDetailScreenState extends State<BookFeedDetailScreen> {
 
   Future<void> _loadData() async {
     setState(() => _loading = true);
+
+    AppLogger.apiStart(
+      'loadBookFeedDetail',
+      detail: 'bookId=${widget.summary.bookId}, title=${widget.summary.bookTitle}',
+    );
 
     try {
       final results = await Future.wait([
@@ -54,7 +77,14 @@ class _BookFeedDetailScreenState extends State<BookFeedDetailScreen> {
         _selectionItems = results[0] as List<PublicBookSelectionItem>;
         _noteItems = results[1] as List<FeedNoteItem>;
       });
-    } catch (e) {
+
+      AppLogger.apiSuccess(
+        'loadBookFeedDetail',
+        detail:
+            'selectionCount=${_selectionItems.length}, momentCount=${_noteItems.length}',
+      );
+    } catch (e, st) {
+      AppLogger.apiError('loadBookFeedDetail', e, stackTrace: st);
       if (!mounted) return;
       showToast(context, '책 피드 조회 실패: $e');
     } finally {
@@ -64,24 +94,216 @@ class _BookFeedDetailScreenState extends State<BookFeedDetailScreen> {
     }
   }
 
-  Future<void> _toggleWishlist() async {
+  Future<void> _openMyLibrary() async {
+    AppLogger.action(
+      'OpenMyLibraryFromBookFeedDetail',
+      detail: 'bookId=${widget.summary.bookId}, title=${widget.summary.bookTitle}',
+    );
+
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => const _MyLibraryPage(),
+      ),
+    );
+  }
+
+  Future<void> _openLatestSelection() async {
+    AppLogger.action(
+      'OpenLatestSelectionFromBookFeedDetail',
+      detail: 'bookId=${widget.summary.bookId}, title=${widget.summary.bookTitle}',
+    );
+
+    final selections = await _bookSelectionsService.loadMySelections();
+    if (!mounted) return;
+
+    final matched = selections
+        .where((e) => e.bookId == widget.summary.bookId)
+        .toList()
+      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+
+    if (matched.isEmpty) {
+      showToast(context, '책 선정 기록을 찾지 못했습니다.');
+      return;
+    }
+
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => BookSelectionDetailScreen(selection: matched.first),
+      ),
+    );
+  }
+
+  Future<void> _openBookRecords() async {
+    AppLogger.action(
+      'OpenBookRecordsFromBookFeedDetail',
+      detail: 'bookId=${widget.summary.bookId}, title=${widget.summary.bookTitle}',
+    );
+
+    final groups = await _myRecordsService.loadMyBookRecordGroups();
+    if (!mounted) return;
+
+    final matched = groups.where((e) => e.bookId == widget.summary.bookId).toList();
+
+    if (matched.isEmpty) {
+      showToast(context, '내 기록을 찾지 못했습니다.');
+      return;
+    }
+
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => BookRecordsScreen(group: matched.first),
+      ),
+    );
+  }
+
+  Future<WishlistBookItem?> _findWishlistBook() async {
+    final wishlist = await _libraryService.loadWishlistBooks();
+    for (final item in wishlist) {
+      if (item.bookId == widget.summary.bookId) {
+        return item;
+      }
+    }
+    return null;
+  }
+
+  Future<BookSelectionItem?> _findLatestSelection() async {
+    final selections = await _bookSelectionsService.loadMySelections();
+    final matched = selections
+        .where((e) => e.bookId == widget.summary.bookId)
+        .toList()
+      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+
+    if (matched.isEmpty) return null;
+    return matched.first;
+  }
+
+  Future<MyBookRecordGroupItem?> _findRecordGroup() async {
+    final groups = await _myRecordsService.loadMyBookRecordGroups();
+    for (final group in groups) {
+      if (group.bookId == widget.summary.bookId) {
+        return group;
+      }
+    }
+    return null;
+  }
+
+  Future<_LibraryBookStatus> _detectLibraryStatus() async {
+    final recordGroup = await _findRecordGroup();
+    if (recordGroup != null) {
+      return _LibraryBookStatus.reading;
+    }
+
+    final selection = await _findLatestSelection();
+    if (selection != null) {
+      return _LibraryBookStatus.selected;
+    }
+
+    final wishlist = await _findWishlistBook();
+    if (wishlist != null) {
+      return _LibraryBookStatus.wishlist;
+    }
+
+    return _LibraryBookStatus.none;
+  }
+
+  Future<void> _handleWishlistSmartFlow() async {
     if (_savingBook) return;
 
     setState(() => _savingBook = true);
 
+    AppLogger.action(
+      'HandleWishlistSmartFlow',
+      detail: 'bookId=${widget.summary.bookId}, title=${widget.summary.bookTitle}',
+    );
+
     try {
-      if (_isWishlisted) {
-        await _libraryService.removeWishlistBook(widget.summary.bookId);
-        if (!mounted) return;
-        setState(() => _isWishlisted = false);
-        showToast(context, '읽고 싶은 책에서 제거되었습니다.');
-      } else {
-        await _libraryService.addWishlistBook(widget.summary.bookId);
-        if (!mounted) return;
-        setState(() => _isWishlisted = true);
-        showToast(context, '읽고 싶은 책에 추가되었습니다.');
+      final status = await _detectLibraryStatus();
+
+      if (!mounted) return;
+
+      switch (status) {
+        case _LibraryBookStatus.none:
+          await _libraryService.addWishlistBook(widget.summary.bookId);
+
+          if (!mounted) return;
+
+          setState(() {
+            _isWishlisted = true;
+          });
+
+          ScaffoldMessenger.of(context).hideCurrentSnackBar();
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text('읽고 싶은 책에 추가되었습니다.'),
+              action: SnackBarAction(
+                label: '내 라이브러리',
+                onPressed: _openMyLibrary,
+              ),
+            ),
+          );
+          break;
+
+        case _LibraryBookStatus.wishlist:
+          ScaffoldMessenger.of(context).hideCurrentSnackBar();
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text('이미 읽고 싶은 책에 있습니다.'),
+              action: SnackBarAction(
+                label: '내 라이브러리',
+                onPressed: _openMyLibrary,
+              ),
+            ),
+          );
+          break;
+
+        case _LibraryBookStatus.selected:
+          ScaffoldMessenger.of(context).hideCurrentSnackBar();
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text('이미 책 선정이 완료된 책입니다.'),
+              action: SnackBarAction(
+                label: '책 선정 보기',
+                onPressed: _openLatestSelection,
+              ),
+            ),
+          );
+          break;
+
+        case _LibraryBookStatus.reading:
+          ScaffoldMessenger.of(context).hideCurrentSnackBar();
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text('이미 독서중인 책입니다.'),
+              action: SnackBarAction(
+                label: '내 기록 보기',
+                onPressed: _openBookRecords,
+              ),
+            ),
+          );
+          break;
+
+        case _LibraryBookStatus.done:
+          ScaffoldMessenger.of(context).hideCurrentSnackBar();
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text('완료된 책입니다.'),
+              action: SnackBarAction(
+                label: '내 라이브러리',
+                onPressed: _openMyLibrary,
+              ),
+            ),
+          );
+          break;
       }
-    } catch (e) {
+    } catch (e, st) {
+      AppLogger.apiError(
+        'handleWishlistSmartFlow',
+        e,
+        stackTrace: st,
+      );
       if (!mounted) return;
       showToast(context, '처리 실패: $e');
     } finally {
@@ -95,6 +317,11 @@ class _BookFeedDetailScreenState extends State<BookFeedDetailScreen> {
     if (_processingLike) return;
 
     setState(() => _processingLike = true);
+
+    AppLogger.action(
+      'ToggleMomentLikeFromBookFeedDetail',
+      detail: 'momentId=${item.id}, current=${item.isLiked}',
+    );
 
     try {
       if (item.isLiked) {
@@ -124,25 +351,18 @@ class _BookFeedDetailScreenState extends State<BookFeedDetailScreen> {
           }).toList();
         });
       }
-    } catch (e) {
+    } catch (e, st) {
+      AppLogger.apiError(
+        'toggleMomentLikeFromBookFeedDetail',
+        e,
+        stackTrace: st,
+      );
       if (!mounted) return;
       showToast(context, '공감 처리 실패: $e');
     } finally {
       if (mounted) {
         setState(() => _processingLike = false);
       }
-    }
-  }
-
-  String _typeLabel(String type) {
-    switch (type) {
-      case 'summary':
-        return '요약';
-      case 'question':
-        return '질문';
-      case 'quote':
-      default:
-        return '구절';
     }
   }
 
@@ -209,12 +429,18 @@ class _BookFeedDetailScreenState extends State<BookFeedDetailScreen> {
       child: InkWell(
         borderRadius: BorderRadius.circular(12),
         onTap: () async {
+          AppLogger.action(
+            'OpenFeedMomentDetail',
+            detail: 'momentId=${item.id}, bookId=${widget.summary.bookId}',
+          );
+
           await Navigator.push(
             context,
             MaterialPageRoute(
               builder: (_) => FeedNoteDetailScreen(item: item),
             ),
           );
+
           await _loadData();
         },
         child: Padding(
@@ -224,7 +450,7 @@ class _BookFeedDetailScreenState extends State<BookFeedDetailScreen> {
             children: [
               Row(
                 children: [
-                  Chip(label: Text(_typeLabel(item.type))),
+                  const Chip(label: Text('문장')),
                   const SizedBox(width: 8),
                   if (item.page != null) Text('p.${item.page}'),
                   const Spacer(),
@@ -312,7 +538,12 @@ class _BookFeedDetailScreenState extends State<BookFeedDetailScreen> {
         title: const Text('책 피드'),
         actions: [
           IconButton(
-            onPressed: _savingBook ? null : _toggleWishlist,
+            onPressed: _openMyLibrary,
+            icon: const Icon(Icons.library_books_outlined),
+            tooltip: '내 라이브러리',
+          ),
+          IconButton(
+            onPressed: _savingBook ? null : _handleWishlistSmartFlow,
             icon: _savingBook
                 ? const SizedBox(
                     width: 20,
@@ -322,7 +553,7 @@ class _BookFeedDetailScreenState extends State<BookFeedDetailScreen> {
                 : Icon(
                     _isWishlisted ? Icons.bookmark : Icons.bookmark_add_outlined,
                   ),
-            tooltip: _isWishlisted ? '읽고 싶은 책에서 제거' : '읽고 싶은 책에 추가',
+            tooltip: '읽고 싶은 책',
           ),
         ],
       ),
@@ -440,13 +671,27 @@ class _BookFeedDetailScreenState extends State<BookFeedDetailScreen> {
                   color: Colors.grey.shade100,
                   borderRadius: BorderRadius.circular(12),
                 ),
-                child: const Text('이 책의 공개 독서 기록이 없습니다.'),
+                child: const Text('이 책의 공개 문장 기록이 없습니다.'),
               )
             else
               ..._noteItems.map(_buildNoteCard),
           ],
         ),
       ),
+    );
+  }
+}
+
+class _MyLibraryPage extends StatelessWidget {
+  const _MyLibraryPage();
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('내 라이브러리'),
+      ),
+      body: const MyLibraryScreen(),
     );
   }
 }

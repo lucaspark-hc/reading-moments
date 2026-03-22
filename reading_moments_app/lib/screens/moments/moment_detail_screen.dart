@@ -6,7 +6,10 @@ import 'package:reading_moments_app/utils/app_utils.dart';
 class MomentDetailScreen extends StatefulWidget {
   final MomentModel moment;
 
-  const MomentDetailScreen({super.key, required this.moment});
+  const MomentDetailScreen({
+    super.key,
+    required this.moment,
+  });
 
   @override
   State<MomentDetailScreen> createState() => _MomentDetailScreenState();
@@ -43,6 +46,16 @@ class _MomentDetailScreenState extends State<MomentDetailScreen> {
       default:
         return '문장';
     }
+  }
+
+  String _formatDate(DateTime dateTime) {
+    final local = dateTime.toLocal();
+    final y = local.year.toString().padLeft(4, '0');
+    final m = local.month.toString().padLeft(2, '0');
+    final d = local.day.toString().padLeft(2, '0');
+    final hh = local.hour.toString().padLeft(2, '0');
+    final mm = local.minute.toString().padLeft(2, '0');
+    return '$y-$m-$d $hh:$mm';
   }
 
   Future<void> _deleteMoment() async {
@@ -82,11 +95,10 @@ class _MomentDetailScreenState extends State<MomentDetailScreen> {
       if (!mounted) return;
       showToast(context, '문장 삭제 실패: $e');
     } finally {
-      if (mounted) {
-        setState(() {
-          _deleting = false;
-        });
-      }
+      if (!mounted) return;
+      setState(() {
+        _deleting = false;
+      });
     }
   }
 
@@ -96,16 +108,11 @@ class _MomentDetailScreenState extends State<MomentDetailScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: () {
-            Navigator.pop(context, false);
-          },
-        ),
         title: const Text('문장 상세'),
         actions: [
           IconButton(
             onPressed: _deleting ? null : _deleteMoment,
+            tooltip: '삭제',
             icon: _deleting
                 ? const SizedBox(
                     width: 18,
@@ -113,22 +120,20 @@ class _MomentDetailScreenState extends State<MomentDetailScreen> {
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
                 : const Icon(Icons.delete_outline),
-            tooltip: '삭제',
           ),
         ],
       ),
       body: ListView(
         padding: const EdgeInsets.all(20),
         children: [
-          Row(
+          Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 8,
+            runSpacing: 8,
             children: [
               Chip(label: Text(_typeLabel(moment.type))),
-              const SizedBox(width: 8),
               Chip(label: Text(_visibilityLabel(moment.visibility))),
-              if (moment.page != null) ...[
-                const SizedBox(width: 8),
-                Text('p.${moment.page}'),
-              ],
+              if (moment.page != null) Text('p.${moment.page}'),
             ],
           ),
           const SizedBox(height: 20),
@@ -144,24 +149,36 @@ class _MomentDetailScreenState extends State<MomentDetailScreen> {
             const SizedBox(height: 28),
             const Text(
               '내 생각',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+              ),
             ),
             const SizedBox(height: 8),
             Text(
-              moment.noteText!,
-              style: const TextStyle(fontSize: 15, height: 1.7),
+              moment.noteText!.trim(),
+              style: const TextStyle(
+                fontSize: 15,
+                height: 1.7,
+              ),
             ),
           ],
           const SizedBox(height: 28),
           Text(
-            '작성일: ${moment.createdAt.toLocal().toString().substring(0, 16)}',
-            style: const TextStyle(color: Colors.grey, fontSize: 13),
+            '작성일: ${_formatDate(moment.createdAt)}',
+            style: const TextStyle(
+              color: Colors.grey,
+              fontSize: 13,
+            ),
           ),
           if (moment.updatedAt != null) ...[
             const SizedBox(height: 6),
             Text(
-              '수정일: ${moment.updatedAt!.toLocal().toString().substring(0, 16)}',
-              style: const TextStyle(color: Colors.grey, fontSize: 13),
+              '수정일: ${_formatDate(moment.updatedAt!)}',
+              style: const TextStyle(
+                color: Colors.grey,
+                fontSize: 13,
+              ),
             ),
           ],
         ],

@@ -1,0 +1,485 @@
+This file is a merged representation of a subset of the codebase, containing specifically included files and files not matching ignore patterns, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of a subset of the repository's contents that is considered the most important context.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Only files matching these patterns are included: supabase/functions/**/*.ts, supabase/migrations/*.sql, package.json
+- Files matching these patterns are excluded: node_modules/**
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+supabase/
+  functions/
+    easy-read-explain/
+      index copy.ts
+      index.ts
+    meaning-unit-split/
+      index.ts
+package.json
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="supabase/functions/easy-read-explain/index copy.ts">
+// Supabase Edge Function
+// function name: easy-read-explain
+
+import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+
+const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
+
+Deno.serve(async (req) => {
+    try {
+        if (req.method === "OPTIONS") {
+            return new Response("ok", {
+                headers: corsHeaders(),
+            });
+        }
+
+        if (!OPENAI_API_KEY) {
+            return jsonResponse(
+                {
+                    error: "OPENAI_API_KEY is not configured.",
+                },
+                500,
+            );
+        }
+
+        const body = await req.json().catch(() => ({}));
+        const text = String(body?.text ?? "").trim();
+        const prompt = String(body?.prompt ?? "").trim();
+
+        if (text.isEmpty ?? false) {
+            return jsonResponse(
+                {
+                    error: "text is required.",
+                },
+                400,
+            );
+        }
+
+        const systemPrompt = prompt.isNotEmpty
+            ? prompt
+            : `
+당신은 독서를 돕는 설명 도우미입니다.
+
+사용자가 읽다가 이해하기 어려운 문장을 보냈습니다.
+이 문장을 쉽고 짧게 풀어주세요.
+
+문장에는 OCR로 인해 일부 오타가 있을 수 있습니다.
+문맥을 기준으로 자연스럽게 해석해주세요.
+
+조건:
+- 최대 3~4문장으로 설명
+- 첫 문장은 반드시 "쉽게 말하면,"으로 시작
+- 어려운 단어는 쉬운 말로 바꿔 설명
+- 핵심 의미만 전달
+- 단정적인 해석은 피하고 "~로 이해할 수 있습니다" 형태 사용
+- 작가 의도 추측 금지
+- 배경 설명 금지
+- 장황한 설명 금지
+
+출력은 반드시 JSON 형식:
+{
+  "summary": "한 줄 요약",
+  "explanation": "간단한 의미 설명"
+}
+`.trim();
+
+        const openAiRes = await fetch("https://api.openai.com/v1/chat/completions", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${OPENAI_API_KEY}`,
+            },
+            body: JSON.stringify({
+                model: "gpt-4.1-mini",
+                response_format: { type: "json_object" },
+                messages: [
+                    {
+                        role: "system",
+                        content: systemPrompt,
+                    },
+                    {
+                        role: "user",
+                        content: `문장:\n"${text}"`,
+                    },
+                ],
+                temperature: 0.4,
+            }),
+        });
+
+        const openAiJson = await openAiRes.json();
+
+        if (!openAiRes.ok) {
+            return jsonResponse(
+                {
+                    error: "OpenAI request failed",
+                    detail: openAiJson,
+                },
+                500,
+            );
+        }
+
+        const content = openAiJson?.choices?.[0]?.message?.content ?? "{}";
+
+        let parsed: { summary?: string; explanation?: string } = {};
+        try {
+            parsed = JSON.parse(content);
+        } catch (_) {
+            parsed = {
+                summary: content,
+                explanation: content,
+            };
+        }
+
+        let summary = String(parsed.summary ?? "").trim();
+        let explanation = String(parsed.explanation ?? "").trim();
+
+        if (!summary && explanation) {
+            summary = explanation;
+        }
+        if (!explanation && summary) {
+            explanation = summary;
+        }
+
+        if (!summary.startsWith("쉽게 말하면,")) {
+            summary = `쉽게 말하면, ${summary.replace(/^쉽게 말하면[, ]*/u, "")}`.trim();
+        }
+
+        return jsonResponse({
+            summary,
+            explanation,
+        });
+    } catch (error) {
+        return jsonResponse(
+            {
+                error: String(error),
+            },
+            500,
+        );
+    }
+});
+
+function corsHeaders() {
+    return {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Headers":
+            "authorization, x-client-info, apikey, content-type",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Content-Type": "application/json; charset=utf-8",
+    };
+}
+
+function jsonResponse(data: unknown, status = 200) {
+    return new Response(JSON.stringify(data), {
+        status,
+        headers: corsHeaders(),
+    });
+}
+</file>
+
+<file path="supabase/functions/easy-read-explain/index.ts">
+import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+
+const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
+
+Deno.serve(async (req) => {
+    try {
+        if (req.method === "OPTIONS") {
+            return new Response("ok", {
+                headers: corsHeaders(),
+            });
+        }
+
+        const body = await req.json().catch(() => ({}));
+        const text = String(body?.text ?? "").trim();
+
+        if (!text) {
+            return jsonResponse({ units: [] });
+        }
+
+        if (!OPENAI_API_KEY) {
+            return jsonResponse(
+                {
+                    error: "OPENAI_API_KEY is not configured.",
+                },
+                500,
+            );
+        }
+
+        const systemPrompt = `
+당신은 OCR 문단을 독서 기록용 의미 단위로 나누는 도우미입니다.
+
+사용자가 책 페이지를 OCR로 추출했습니다.
+OCR에는 띄어쓰기, 줄바꿈, 일부 오타가 있을 수 있습니다.
+문맥을 보면서 자연스럽게 보정하되 과도한 재작성은 하지 마세요.
+
+목표:
+- 전체 문단을 의미 단위로 나눈다
+- 각 단위는 1~2문장 수준
+- 의미가 자연스럽게 끊기는 기준으로 분리
+- 문장 일부가 잘리지 않게 한다
+- 원문 의미를 유지한다
+- 번호/설명/주석 없이 결과만 준다
+
+반드시 JSON 형식으로만 출력:
+{
+  "units": ["의미 단위 1", "의미 단위 2", "의미 단위 3"]
+}
+`.trim();
+
+        const openAiRes = await fetch("https://api.openai.com/v1/chat/completions", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${OPENAI_API_KEY}`,
+            },
+            body: JSON.stringify({
+                model: "gpt-4.1-mini",
+                response_format: { type: "json_object" },
+                messages: [
+                    { role: "system", content: systemPrompt },
+                    { role: "user", content: text },
+                ],
+                temperature: 0.2,
+            }),
+        });
+
+        const openAiJson = await openAiRes.json();
+
+        if (!openAiRes.ok) {
+            return jsonResponse(
+                {
+                    error: "OpenAI request failed",
+                    detail: openAiJson,
+                },
+                500,
+            );
+        }
+
+        const content = openAiJson?.choices?.[0]?.message?.content ?? "{}";
+
+        let parsed: { units?: string[] } = {};
+        try {
+            parsed = JSON.parse(content);
+        } catch (_) {
+            parsed = { units: [] };
+        }
+
+        const units = Array.isArray(parsed.units)
+            ? parsed.units
+                .map((e) => String(e).trim())
+                .filter((e) => e.length > 0)
+            : [];
+
+        return jsonResponse({ units });
+    } catch (error) {
+        return jsonResponse(
+            {
+                error: String(error),
+            },
+            500,
+        );
+    }
+});
+
+function corsHeaders() {
+    return {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Headers":
+            "authorization, x-client-info, apikey, content-type",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Content-Type": "application/json; charset=utf-8",
+    };
+}
+
+function jsonResponse(data: unknown, status = 200) {
+    return new Response(JSON.stringify(data), {
+        status,
+        headers: corsHeaders(),
+    });
+}
+</file>
+
+<file path="supabase/functions/meaning-unit-split/index.ts">
+import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+
+const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
+
+Deno.serve(async (req) => {
+    try {
+        if (req.method === "OPTIONS") {
+            return new Response("ok", {
+                headers: corsHeaders(),
+            });
+        }
+
+        const body = await req.json().catch(() => ({}));
+        const text = String(body?.text ?? "").trim();
+
+        if (!text) {
+            return jsonResponse({ units: [] });
+        }
+
+        if (!OPENAI_API_KEY) {
+            return jsonResponse(
+                {
+                    error: "OPENAI_API_KEY is not configured.",
+                },
+                500,
+            );
+        }
+
+        const systemPrompt = `
+당신은 OCR 문단을 독서 기록용 의미 단위로 나누는 도우미입니다.
+
+사용자가 책 페이지를 OCR로 추출했습니다.
+OCR에는 띄어쓰기, 줄바꿈, 일부 오타가 있을 수 있습니다.
+문맥을 보면서 자연스럽게 보정하되 과도한 재작성은 하지 마세요.
+
+목표:
+- 전체 문단을 의미 단위로 나눈다
+- 각 단위는 1~2문장 수준
+- 의미가 자연스럽게 끊기는 기준으로 분리
+- 문장 일부가 잘리지 않게 한다
+- 원문 의미를 유지한다
+- 번호/설명/주석 없이 결과만 준다
+
+반드시 JSON 형식으로만 출력:
+{
+  "units": ["의미 단위 1", "의미 단위 2", "의미 단위 3"]
+}
+`.trim();
+
+        const openAiRes = await fetch("https://api.openai.com/v1/chat/completions", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${OPENAI_API_KEY}`,
+            },
+            body: JSON.stringify({
+                model: "gpt-4.1-mini",
+                response_format: { type: "json_object" },
+                messages: [
+                    { role: "system", content: systemPrompt },
+                    { role: "user", content: text },
+                ],
+                temperature: 0.2,
+            }),
+        });
+
+        const openAiJson = await openAiRes.json();
+
+        if (!openAiRes.ok) {
+            return jsonResponse(
+                {
+                    error: "OpenAI request failed",
+                    detail: openAiJson,
+                },
+                500,
+            );
+        }
+
+        const content = openAiJson?.choices?.[0]?.message?.content ?? "{}";
+
+        let parsed: { units?: string[] } = {};
+        try {
+            parsed = JSON.parse(content);
+        } catch (_) {
+            parsed = { units: [] };
+        }
+
+        const units = Array.isArray(parsed.units)
+            ? parsed.units
+                .map((e) => String(e).trim())
+                .filter((e) => e.length > 0)
+            : [];
+
+        return jsonResponse({ units });
+    } catch (error) {
+        return jsonResponse(
+            {
+                error: String(error),
+            },
+            500,
+        );
+    }
+});
+
+function corsHeaders() {
+    return {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Headers":
+            "authorization, x-client-info, apikey, content-type",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Content-Type": "application/json; charset=utf-8",
+    };
+}
+
+function jsonResponse(data: unknown, status = 200) {
+    return new Response(JSON.stringify(data), {
+        status,
+        headers: corsHeaders(),
+    });
+}
+</file>
+
+<file path="package.json">
+{
+  "name": "reading-moments-server",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "@supabase/supabase-js": "^2.98.0",
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1"
+  }
+}
+</file>
+
+</files>

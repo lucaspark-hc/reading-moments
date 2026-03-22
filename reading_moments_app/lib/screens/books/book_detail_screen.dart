@@ -54,7 +54,7 @@ class _BookDetailScreenState extends State<BookDetailScreen> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('기록 조회 실패: $e')),
+        SnackBar(content: Text('내 기록 조회 실패: $e')),
       );
     } finally {
       if (!mounted) return;
@@ -134,23 +134,24 @@ class _BookDetailScreenState extends State<BookDetailScreen> {
     }
   }
 
-  String _typeLabel(String type) {
-    switch (type) {
-      case 'summary':
-        return '요약';
-      case 'question':
-        return '질문';
-      case 'quote':
-      default:
-        return '구절';
-    }
-  }
-
   String _visibilityLabel(String visibility) {
     return visibility == 'public' ? '공개' : '비공개';
   }
 
+  String _formatDate(DateTime dateTime) {
+    final local = dateTime.toLocal();
+    final y = local.year.toString().padLeft(4, '0');
+    final m = local.month.toString().padLeft(2, '0');
+    final d = local.day.toString().padLeft(2, '0');
+    final hh = local.hour.toString().padLeft(2, '0');
+    final mm = local.minute.toString().padLeft(2, '0');
+    return '$y-$m-$d $hh:$mm';
+  }
+
   Widget _buildNoteCard(ReadingNote note) {
+    final hasSentence = (note.quoteText ?? '').trim().isNotEmpty;
+    final hasThought = (note.noteText ?? '').trim().isNotEmpty;
+
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 8),
       child: Padding(
@@ -160,8 +161,6 @@ class _BookDetailScreenState extends State<BookDetailScreen> {
           children: [
             Row(
               children: [
-                Chip(label: Text(_typeLabel(note.type))),
-                const SizedBox(width: 8),
                 Chip(label: Text(_visibilityLabel(note.visibility))),
                 const Spacer(),
                 if (note.page != null) ...[
@@ -189,26 +188,48 @@ class _BookDetailScreenState extends State<BookDetailScreen> {
                 ),
               ],
             ),
-            if ((note.quoteText ?? '').trim().isNotEmpty) ...[
+            if (hasSentence) ...[
               const SizedBox(height: 10),
+              const Text(
+                '문장',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.grey,
+                ),
+              ),
+              const SizedBox(height: 6),
               Text(
                 '“${note.quoteText!}”',
                 style: const TextStyle(
                   fontSize: 16,
                   fontWeight: FontWeight.w600,
+                  height: 1.5,
                 ),
               ),
             ],
-            if ((note.noteText ?? '').trim().isNotEmpty) ...[
-              const SizedBox(height: 10),
+            if (hasThought) ...[
+              const SizedBox(height: 14),
+              const Text(
+                '내 생각',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.grey,
+                ),
+              ),
+              const SizedBox(height: 6),
               Text(
                 note.noteText!,
-                style: const TextStyle(fontSize: 15),
+                style: const TextStyle(
+                  fontSize: 15,
+                  height: 1.6,
+                ),
               ),
             ],
-            const SizedBox(height: 10),
+            const SizedBox(height: 12),
             Text(
-              note.createdAt.toLocal().toString().substring(0, 16),
+              _formatDate(note.createdAt),
               style: const TextStyle(
                 color: Colors.grey,
                 fontSize: 12,
@@ -217,6 +238,17 @@ class _BookDetailScreenState extends State<BookDetailScreen> {
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildEmptyState() {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade100,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: const Text('아직 기록이 없습니다. 첫 문장을 기록해 보세요.'),
     );
   }
 
@@ -230,8 +262,8 @@ class _BookDetailScreenState extends State<BookDetailScreen> {
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _goAddNote,
-        label: const Text('기록 추가'),
-        icon: const Icon(Icons.add),
+        label: const Text('문장 기록'),
+        icon: const Icon(Icons.edit_note),
       ),
       body: RefreshIndicator(
         onRefresh: _loadNotes,
@@ -249,7 +281,10 @@ class _BookDetailScreenState extends State<BookDetailScreen> {
             if ((book.author ?? '').trim().isNotEmpty)
               Text(
                 book.author!,
-                style: const TextStyle(fontSize: 16, color: Colors.grey),
+                style: const TextStyle(
+                  fontSize: 16,
+                  color: Colors.grey,
+                ),
               ),
             const SizedBox(height: 16),
             if ((book.coverUrl ?? '').trim().isNotEmpty)
@@ -275,6 +310,13 @@ class _BookDetailScreenState extends State<BookDetailScreen> {
                 fontWeight: FontWeight.bold,
               ),
             ),
+            const SizedBox(height: 8),
+            Text(
+              '이 책에서 기록한 문장과 생각을 모아봅니다.',
+              style: TextStyle(
+                color: Colors.grey.shade700,
+              ),
+            ),
             const SizedBox(height: 12),
             if (_isLoading)
               const Padding(
@@ -282,14 +324,7 @@ class _BookDetailScreenState extends State<BookDetailScreen> {
                 child: Center(child: CircularProgressIndicator()),
               )
             else if (_notes.isEmpty)
-              Container(
-                padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  color: Colors.grey.shade100,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: const Text('아직 기록이 없습니다. 첫 기록을 남겨보세요.'),
-              )
+              _buildEmptyState()
             else
               ..._notes.map(_buildNoteCard),
             const SizedBox(height: 100),

@@ -1,82 +1,121 @@
 import 'package:flutter/material.dart';
-import 'package:reading_moments_app/models/book_model.dart';
+import 'package:reading_moments_app/core/log/app_logger.dart';
+import 'package:reading_moments_app/core/log/logged_state_mixin.dart';
 import 'package:reading_moments_app/models/my_book_record_group_item.dart';
 import 'package:reading_moments_app/models/my_record_item.dart';
-import 'package:reading_moments_app/screens/books/add_note_screen.dart';
 import 'package:reading_moments_app/screens/moments/moment_create_screen.dart';
 import 'package:reading_moments_app/screens/moments/moment_scan_screen.dart';
-import 'package:reading_moments_app/screens/moments/moments_list_screen.dart';
-import 'package:reading_moments_app/screens/records/edit_record_screen.dart';
-import 'package:reading_moments_app/screens/records/record_detail_screen.dart';
+import 'package:reading_moments_app/screens/records/book_records_list_screen.dart';
+import 'package:reading_moments_app/services/library_service.dart';
 import 'package:reading_moments_app/services/my_records_service.dart';
 import 'package:reading_moments_app/utils/app_utils.dart';
-
-enum MyRecordFilterType { all, publicOnly, privateOnly }
 
 class BookRecordsScreen extends StatefulWidget {
   final MyBookRecordGroupItem group;
 
-  const BookRecordsScreen({super.key, required this.group});
+  const BookRecordsScreen({
+    super.key,
+    required this.group,
+  });
 
   @override
   State<BookRecordsScreen> createState() => _BookRecordsScreenState();
 }
 
-class _BookRecordsScreenState extends State<BookRecordsScreen> {
+class _BookRecordsScreenState extends State<BookRecordsScreen>
+    with LoggedStateMixin<BookRecordsScreen> {
   final MyRecordsService _myRecordsService = MyRecordsService();
+  final LibraryService _libraryService = LibraryService();
 
+  late MyBookRecordGroupItem _group;
   bool _loading = true;
-  List<MyRecordItem> _items = [];
-  MyRecordFilterType _filter = MyRecordFilterType.all;
+  bool _emptyStateLogged = false;
+  bool _markingDone = false;
+  LibraryBookStatus _bookStatus = LibraryBookStatus.none;
+  List<MyRecordItem> _todayItems = [];
+
+  @override
+  String get screenName => 'BookRecordsScreen';
 
   @override
   void initState() {
     super.initState();
-    _loadItems();
+    _group = widget.group;
+    _reloadScreen();
   }
 
-  String _visibilityFilterValue() {
-    switch (_filter) {
-      case MyRecordFilterType.publicOnly:
-        return 'public';
-      case MyRecordFilterType.privateOnly:
-        return 'private';
-      case MyRecordFilterType.all:
-        return 'all';
-    }
-  }
-
-  Future<void> _loadItems() async {
+  Future<void> _reloadScreen() async {
     setState(() => _loading = true);
 
+    AppLogger.apiStart(
+      'reloadBookRecordsScreen',
+      detail: 'bookId=${_group.bookId}, title=${_group.bookTitle}',
+    );
+    print(
+      '📘 reloadBookRecordsScreen START | bookId=${_group.bookId} | title=${_group.bookTitle}',
+    );
+
     try {
-      final items = await _myRecordsService.loadMyNotesByBook(
-        widget.group.bookId,
-        visibility: _visibilityFilterValue(),
+      final groups = await _myRecordsService.loadMyBookRecordGroups();
+      final todayItems = await _myRecordsService.loadTodayMomentsByBook(
+        _group.bookId,
       );
+      final bookStatus = await _libraryService.getBookStatus(_group.bookId);
+
+      final matched = groups.where((e) => e.bookId == _group.bookId).toList();
+      if (matched.isNotEmpty) {
+        _group = matched.first;
+      } else {
+        _group = MyBookRecordGroupItem(
+          bookId: _group.bookId,
+          bookTitle: _group.bookTitle,
+          bookAuthor: _group.bookAuthor,
+          coverUrl: _group.coverUrl,
+          totalCount: 0,
+          publicCount: 0,
+          privateCount: 0,
+          latestCreatedAt: DateTime.now(),
+        );
+      }
 
       if (!mounted) return;
 
       setState(() {
-        _items = items;
+        _todayItems = todayItems;
+        _bookStatus = bookStatus;
+        _emptyStateLogged = false;
       });
-    } catch (e) {
+
+      AppLogger.apiSuccess(
+        'reloadBookRecordsScreen',
+        detail:
+            'summaryCount=${_group.totalCount}, todayCount=${_todayItems.length}, status=${_bookStatus.name}',
+      );
+      print(
+        '✅ reloadBookRecordsScreen SUCCESS | summaryCount=${_group.totalCount} | todayCount=${_todayItems.length} | status=${_bookStatus.name}',
+      );
+    } catch (e, st) {
+      AppLogger.apiError('reloadBookRecordsScreen', e, stackTrace: st);
+      print('❌ reloadBookRecordsScreen FAIL | $e');
       if (!mounted) return;
-      showToast(context, '기록 조회 실패: $e');
+      showToast(context, '화면 갱신 실패: $e');
     } finally {
       if (mounted) {
         setState(() => _loading = false);
       }
+      print('🏁 reloadBookRecordsScreen END');
     }
   }
 
-  Future<void> _deleteRecord(MyRecordItem item) async {
+  Future<void> _markBookAsDone() async {
+    if (_markingDone) return;
+
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) {
         return AlertDialog(
-          title: const Text('기록 삭제'),
-          content: const Text('이 기록을 삭제하시겠습니까?'),
+          title: const Text('독서 완료'),
+          content: Text('"${_group.bookTitle}" 을(를) 완료한 책으로 전환하시겠습니까?'),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context, false),
@@ -84,7 +123,7 @@ class _BookRecordsScreenState extends State<BookRecordsScreen> {
             ),
             FilledButton(
               onPressed: () => Navigator.pop(context, true),
-              child: const Text('삭제'),
+              child: const Text('완료'),
             ),
           ],
         );
@@ -93,190 +132,132 @@ class _BookRecordsScreenState extends State<BookRecordsScreen> {
 
     if (confirmed != true) return;
 
-    try {
-      await _myRecordsService.deleteNote(item.id);
-
-      if (!mounted) return;
-      showToast(context, '기록이 삭제되었습니다.');
-      await _loadItems();
-    } catch (e) {
-      if (!mounted) return;
-      showToast(context, '기록 삭제 실패: $e');
-    }
-  }
-
-  Future<void> _editRecord(MyRecordItem item) async {
-    final updated = await Navigator.push<bool>(
-      context,
-      MaterialPageRoute(builder: (_) => EditRecordScreen(item: item)),
+    AppLogger.action(
+      'MarkBookAsDoneFromRecords',
+      detail: 'bookId=${_group.bookId}, title=${_group.bookTitle}',
+    );
+    print(
+      '🏁 MarkBookAsDoneFromRecords | bookId=${_group.bookId} | title=${_group.bookTitle}',
     );
 
-    if (updated == true) {
-      await _loadItems();
+    setState(() {
+      _markingDone = true;
+    });
+
+    try {
+      await _libraryService.markBookAsDone(_group.bookId);
+
+      if (!mounted) return;
+
+      showToast(context, '독서 완료 처리되었습니다.');
+
+      Navigator.pop(context, {
+        'action': 'mark_done',
+        'bookId': _group.bookId,
+      });
+    } catch (e, st) {
+      AppLogger.apiError('markBookAsDone(from records)', e, stackTrace: st);
+      print('❌ MarkBookAsDoneFromRecords FAIL | $e');
+      if (!mounted) return;
+      showToast(context, '독서 완료 처리 실패: $e');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _markingDone = false;
+        });
+      }
     }
   }
 
-  Future<void> _openRecordDetail(MyRecordItem item) async {
+  Future<void> _openRecordsList() async {
+    AppLogger.action(
+      'OpenBookRecordsList',
+      detail: 'bookId=${_group.bookId}, title=${_group.bookTitle}',
+    );
+    print(
+      '📚 OpenBookRecordsList | bookId=${_group.bookId} | title=${_group.bookTitle}',
+    );
+
     final changed = await Navigator.push<bool>(
       context,
-      MaterialPageRoute(builder: (_) => RecordDetailScreen(item: item)),
+      MaterialPageRoute(
+        builder: (_) => BookRecordsListScreen(group: _group),
+      ),
     );
 
     if (changed == true) {
-      await _loadItems();
+      await _reloadScreen();
     }
   }
 
-  String _typeLabel(String type) {
-    switch (type) {
-      case 'summary':
-        return '요약';
-      case 'question':
-        return '질문';
-      case 'quote':
-      default:
-        return '구절';
-    }
-  }
+  Future<void> _openMomentCreate() async {
+    AppLogger.action(
+      'OpenMomentCreate',
+      detail: 'bookId=${_group.bookId}, title=${_group.bookTitle}',
+    );
+    print(
+      '✍️ OpenMomentCreate | bookId=${_group.bookId} | title=${_group.bookTitle}',
+    );
 
-  Widget _buildFilterSection() {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-      child: SegmentedButton<MyRecordFilterType>(
-        segments: const [
-          ButtonSegment<MyRecordFilterType>(
-            value: MyRecordFilterType.all,
-            label: Text('전체'),
-            icon: Icon(Icons.list),
-          ),
-          ButtonSegment<MyRecordFilterType>(
-            value: MyRecordFilterType.publicOnly,
-            label: Text('공개'),
-            icon: Icon(Icons.public),
-          ),
-          ButtonSegment<MyRecordFilterType>(
-            value: MyRecordFilterType.privateOnly,
-            label: Text('비공개'),
-            icon: Icon(Icons.lock_outline),
-          ),
-        ],
-        selected: {_filter},
-        onSelectionChanged: (selected) async {
-          setState(() {
-            _filter = selected.first;
-          });
-          await _loadItems();
-        },
+    final result = await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => MomentCreateScreen(bookId: _group.bookId),
       ),
     );
+
+    if (result != null) {
+      await _reloadScreen();
+    }
   }
 
-  Widget _buildRecordCard(MyRecordItem item) {
-    final isPublic = item.visibility == 'public';
+  Future<void> _openMomentScan() async {
+    AppLogger.action(
+      'OpenMomentScan',
+      detail: 'bookId=${_group.bookId}, title=${_group.bookTitle}',
+    );
+    print(
+      '📷 OpenMomentScan | bookId=${_group.bookId} | title=${_group.bookTitle}',
+    );
 
-    return Card(
-      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(12),
-        onTap: () => _openRecordDetail(item),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(14, 14, 8, 14),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Chip(label: Text(_typeLabel(item.type))),
-                  const SizedBox(width: 8),
-                  Chip(label: Text(isPublic ? '공개' : '비공개')),
-                  if (item.page != null) ...[
-                    const SizedBox(width: 8),
-                    Text('p.${item.page}'),
-                  ],
-                  const Spacer(),
-                  PopupMenuButton<String>(
-                    onSelected: (value) async {
-                      if (value == 'detail') {
-                        await _openRecordDetail(item);
-                      } else if (value == 'edit') {
-                        await _editRecord(item);
-                      } else if (value == 'delete') {
-                        await _deleteRecord(item);
-                      }
-                    },
-                    itemBuilder: (context) => const [
-                      PopupMenuItem<String>(
-                        value: 'detail',
-                        child: Text('상세보기'),
-                      ),
-                      PopupMenuItem<String>(value: 'edit', child: Text('수정')),
-                      PopupMenuItem<String>(value: 'delete', child: Text('삭제')),
-                    ],
-                  ),
-                ],
-              ),
-              if ((item.quoteText ?? '').trim().isNotEmpty) ...[
-                const SizedBox(height: 10),
-                Text(
-                  '“${item.quoteText!}”',
-                  maxLines: 3,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                    height: 1.5,
-                  ),
-                ),
-              ],
-              if ((item.noteText ?? '').trim().isNotEmpty) ...[
-                const SizedBox(height: 12),
-                Text(
-                  item.noteText!,
-                  maxLines: 4,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 15, height: 1.6),
-                ),
-              ],
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  Text(
-                    item.createdAt.toLocal().toString().substring(0, 16),
-                    style: const TextStyle(color: Colors.grey, fontSize: 12),
-                  ),
-                  const Spacer(),
-                  const Icon(Icons.chevron_right, size: 18, color: Colors.grey),
-                ],
-              ),
-            ],
-          ),
+    final result = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => MomentScanScreen(
+          bookId: _group.bookId,
+          bookTitle: _group.bookTitle,
         ),
       ),
     );
+
+    if (result == true) {
+      await _reloadScreen();
+    }
   }
 
-  Widget _buildHeader() {
-    final g = widget.group;
-    final hasAuthor = (g.bookAuthor ?? '').trim().isNotEmpty;
+  Widget _buildHeaderCard() {
+    final hasAuthor = (_group.bookAuthor ?? '').trim().isNotEmpty;
+    final canMarkDone = _bookStatus == LibraryBookStatus.reading ||
+        _bookStatus == LibraryBookStatus.selected;
 
     return Card(
       margin: const EdgeInsets.all(16),
       child: Padding(
-        padding: const EdgeInsets.all(14),
+        padding: const EdgeInsets.all(18),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if ((g.coverUrl ?? '').trim().isNotEmpty)
+            if ((_group.coverUrl ?? '').trim().isNotEmpty)
               ClipRRect(
-                borderRadius: BorderRadius.circular(8),
+                borderRadius: BorderRadius.circular(10),
                 child: Image.network(
-                  g.coverUrl!,
-                  width: 72,
-                  height: 102,
+                  _group.coverUrl!,
+                  width: 86,
+                  height: 122,
                   fit: BoxFit.cover,
                   errorBuilder: (_, __, ___) => Container(
-                    width: 72,
-                    height: 102,
+                    width: 86,
+                    height: 122,
                     color: Colors.grey.shade300,
                     alignment: Alignment.center,
                     child: const Text('표지 없음'),
@@ -285,52 +266,74 @@ class _BookRecordsScreenState extends State<BookRecordsScreen> {
               )
             else
               Container(
-                width: 72,
-                height: 102,
+                width: 86,
+                height: 122,
                 decoration: BoxDecoration(
                   color: Colors.grey.shade300,
-                  borderRadius: BorderRadius.circular(8),
+                  borderRadius: BorderRadius.circular(10),
                 ),
                 alignment: Alignment.center,
                 child: const Text('표지 없음'),
               ),
-            const SizedBox(width: 14),
+            const SizedBox(width: 16),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    g.bookTitle,
+                    _group.bookTitle,
                     style: const TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.bold,
                     ),
                   ),
                   if (hasAuthor) ...[
-                    const SizedBox(height: 6),
+                    const SizedBox(height: 8),
                     Text(
-                      g.bookAuthor!,
-                      style: const TextStyle(color: Colors.grey),
+                      _group.bookAuthor!,
+                      style: const TextStyle(
+                        color: Colors.grey,
+                        fontSize: 15,
+                      ),
                     ),
                   ],
-                  const SizedBox(height: 10),
-                  Text('내 기록 ${g.totalCount}개'),
-                  Text('공개 ${g.publicCount}개 · 비공개 ${g.privateCount}개'),
-                  const SizedBox(height: 12),
-                  ElevatedButton.icon(
-                    icon: const Icon(Icons.menu_book),
-                    label: const Text('문장 보기'),
-                    onPressed: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => MomentsListScreen(
-                            bookId: widget.group.bookId,
-                            bookTitle: widget.group.bookTitle,
-                          ),
+                  const SizedBox(height: 16),
+                  Text(
+                    '내 기록 ${_group.totalCount}개',
+                    style: const TextStyle(fontSize: 16),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '공개 ${_group.publicCount}개 · 비공개 ${_group.privateCount}개',
+                    style: const TextStyle(fontSize: 16),
+                  ),
+                  const SizedBox(height: 18),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      if (_group.totalCount > 0)
+                        ElevatedButton.icon(
+                          onPressed: _openRecordsList,
+                          icon: const Icon(Icons.menu_book),
+                          label: const Text('내 기록 보기'),
                         ),
-                      );
-                    },
+                      if (canMarkDone)
+                        FilledButton.icon(
+                          onPressed: _markingDone ? null : _markBookAsDone,
+                          icon: _markingDone
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : const Icon(Icons.check_circle_outline),
+                          label: const Text('독서 완료'),
+                        ),
+                    ],
                   ),
                 ],
               ),
@@ -341,53 +344,286 @@ class _BookRecordsScreenState extends State<BookRecordsScreen> {
     );
   }
 
-  Future<void> _openAddNote() async {
-    final book = BookModel(
-      id: widget.group.bookId,
-      isbn: '',
-      title: widget.group.bookTitle,
-      author: widget.group.bookAuthor,
-      coverUrl: widget.group.coverUrl,
-      category: null,
-    );
-
-    final result = await Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => AddNoteScreen(book: book)),
-    );
-
-    if (result != null) {
-      await _loadItems();
-    }
+  bool _isCompactTodayCard(
+    MyRecordItem item,
+    bool hasExplain,
+    bool hasThought,
+  ) {
+    final quoteLength = (item.quoteText ?? '').trim().length;
+    return !hasExplain && !hasThought && quoteLength <= 40;
   }
 
-  Future<void> _openMomentCreate() async {
-    final result = await Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => MomentCreateScreen(bookId: widget.group.bookId),
-      ),
-    );
-
-    if (result != null) {
-      await _loadItems();
-    }
-  }
-
-  Future<void> _openMomentScan() async {
-    final result = await Navigator.push<bool>(
-      context,
-      MaterialPageRoute(
-        builder: (_) => MomentScanScreen(
-          bookId: widget.group.bookId,
-          bookTitle: widget.group.bookTitle,
+  Widget _buildCompactTodayCard(MyRecordItem item, bool isPublic) {
+    return Row(
+      children: [
+        Chip(
+          label: Text(isPublic ? '공개' : '비공개'),
         ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            '“${item.quoteText ?? ''}”',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w600,
+              height: 1.3,
+            ),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Text(
+          item.createdAt.toLocal().toString().substring(11, 16),
+          style: const TextStyle(
+            color: Colors.grey,
+            fontSize: 12,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildFullTodayCard(
+    MyRecordItem item,
+    bool isPublic,
+    bool hasExplain,
+    bool hasThought,
+  ) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Chip(label: Text(isPublic ? '공개' : '비공개')),
+        const SizedBox(height: 10),
+        const Text(
+          '문장',
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.bold,
+            color: Colors.grey,
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          '“${item.quoteText ?? ''}”',
+          maxLines: 4,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.w600,
+            height: 1.5,
+          ),
+        ),
+        if (hasExplain) ...[
+          const SizedBox(height: 12),
+          const Text(
+            '쉽게 풀어보기',
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.bold,
+              color: Colors.grey,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.blue.shade50,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: Colors.blue.shade100),
+            ),
+            child: Text(
+              item.explainText!.trim(),
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                fontSize: 14,
+                height: 1.6,
+              ),
+            ),
+          ),
+        ],
+        if (hasThought) ...[
+          const SizedBox(height: 12),
+          const Text(
+            '내 생각',
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.bold,
+              color: Colors.grey,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            item.noteText!.trim(),
+            maxLines: 3,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              fontSize: 15,
+              height: 1.6,
+            ),
+          ),
+        ],
+        const SizedBox(height: 12),
+        Text(
+          item.createdAt.toLocal().toString().substring(0, 16),
+          style: const TextStyle(
+            color: Colors.grey,
+            fontSize: 12,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildTodayCard(MyRecordItem item) {
+    final isPublic = item.visibility == 'public';
+    final hasExplain = (item.explainText ?? '').trim().isNotEmpty;
+    final hasThought = (item.noteText ?? '').trim().isNotEmpty;
+    final isCompact = _isCompactTodayCard(item, hasExplain, hasThought);
+
+    return Card(
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
+        child: isCompact
+            ? _buildCompactTodayCard(item, isPublic)
+            : _buildFullTodayCard(
+                item,
+                isPublic,
+                hasExplain,
+                hasThought,
+              ),
       ),
     );
+  }
 
-    if (result == true) {
-      await _loadItems();
+  Widget _buildEmptyState() {
+    if (!_emptyStateLogged) {
+      _emptyStateLogged = true;
+      AppLogger.action(
+        'BookRecordsEmptyStateViewed',
+        detail: 'bookId=${_group.bookId}, title=${_group.bookTitle}',
+      );
+      print(
+        '🫙 BookRecordsEmptyStateViewed | bookId=${_group.bookId} | title=${_group.bookTitle}',
+      );
     }
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade100,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            '아직 기록이 없습니다',
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '첫 번째 생각을 남겨보세요',
+            style: TextStyle(
+              fontSize: 14,
+              color: Colors.grey.shade700,
+            ),
+          ),
+          const SizedBox(height: 16),
+          SizedBox(
+            height: 48,
+            child: FilledButton.icon(
+              onPressed: () async {
+                AppLogger.action(
+                  'OpenMomentCreateFromEmptyState',
+                  detail: 'bookId=${_group.bookId}, title=${_group.bookTitle}',
+                );
+                print(
+                  '✍️ OpenMomentCreateFromEmptyState | bookId=${_group.bookId} | title=${_group.bookTitle}',
+                );
+                await _openMomentCreate();
+              },
+              icon: const Icon(Icons.edit_note),
+              label: const Text('기록 남기기'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTodaySectionHeader() {
+    final count = _todayItems.length;
+    final countText = count == 0 ? '오늘 아직 기록이 없어요' : '오늘 $count개 기록했어요';
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            '오늘 독서 기록',
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            countText,
+            style: TextStyle(
+              fontSize: 14,
+              color: Colors.grey.shade700,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTodaySection() {
+    if (_group.totalCount == 0) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _buildTodaySectionHeader(),
+          _buildEmptyState(),
+        ],
+      );
+    }
+
+    if (_todayItems.isEmpty) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _buildTodaySectionHeader(),
+          Container(
+            margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              color: Colors.grey.shade100,
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: const Text('오늘 기록은 아직 없습니다. 문장 스캔 또는 문장 기록으로 이어가 보세요.'),
+          ),
+        ],
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildTodaySectionHeader(),
+        ..._todayItems.map(_buildTodayCard),
+      ],
+    );
   }
 
   Widget _buildBody() {
@@ -395,17 +631,13 @@ class _BookRecordsScreenState extends State<BookRecordsScreen> {
       return const Center(child: CircularProgressIndicator());
     }
 
-    if (_items.isEmpty) {
-      return const Center(child: Text('조건에 맞는 기록이 없습니다.'));
-    }
-
     return RefreshIndicator(
-      onRefresh: _loadItems,
+      onRefresh: _reloadScreen,
       child: ListView(
         children: [
-          _buildHeader(),
-          ..._items.map(_buildRecordCard),
-          const SizedBox(height: 180),
+          _buildHeaderCard(),
+          _buildTodaySection(),
+          const SizedBox(height: 120),
         ],
       ),
     );
@@ -414,35 +646,25 @@ class _BookRecordsScreenState extends State<BookRecordsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('책별 내 기록')),
-      body: Column(
-        children: [
-          _buildFilterSection(),
-          Expanded(child: _buildBody()),
-        ],
+      appBar: AppBar(
+        title: const Text('책별 내 기록'),
       ),
+      body: _buildBody(),
       floatingActionButton: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           FloatingActionButton.extended(
-            heroTag: 'moment_scan',
+            heroTag: 'moment_scan_summary',
             onPressed: _openMomentScan,
             icon: const Icon(Icons.document_scanner_outlined),
             label: const Text('문장 스캔'),
           ),
           const SizedBox(height: 12),
           FloatingActionButton.extended(
-            heroTag: 'moment_add',
+            heroTag: 'moment_add_summary',
             onPressed: _openMomentCreate,
             icon: const Icon(Icons.format_quote),
             label: const Text('문장 기록'),
-          ),
-          const SizedBox(height: 12),
-          FloatingActionButton.extended(
-            heroTag: 'note_add',
-            onPressed: _openAddNote,
-            icon: const Icon(Icons.add),
-            label: const Text('기록 추가'),
           ),
         ],
       ),

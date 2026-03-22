@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:reading_moments_app/core/log/app_logger.dart';
+import 'package:reading_moments_app/core/log/logged_state_mixin.dart';
 import 'package:reading_moments_app/models/my_book_record_group_item.dart';
 import 'package:reading_moments_app/screens/records/book_records_screen.dart';
 import 'package:reading_moments_app/services/my_records_service.dart';
@@ -12,11 +14,15 @@ class MyRecordsScreen extends StatefulWidget {
   State<MyRecordsScreen> createState() => _MyRecordsScreenState();
 }
 
-class _MyRecordsScreenState extends State<MyRecordsScreen> {
+class _MyRecordsScreenState extends State<MyRecordsScreen>
+    with LoggedStateMixin<MyRecordsScreen> {
   final MyRecordsService _myRecordsService = MyRecordsService();
 
   bool _loading = true;
   List<MyBookRecordGroupItem> _items = [];
+
+  @override
+  String get screenName => 'MyRecordsScreen';
 
   @override
   void initState() {
@@ -27,6 +33,8 @@ class _MyRecordsScreenState extends State<MyRecordsScreen> {
   Future<void> _loadItems() async {
     setState(() => _loading = true);
 
+    AppLogger.apiStart('loadMyBookRecordGroups(from MyRecordsScreen)');
+
     try {
       final items = await _myRecordsService.loadMyBookRecordGroups();
 
@@ -35,7 +43,17 @@ class _MyRecordsScreenState extends State<MyRecordsScreen> {
       setState(() {
         _items = items;
       });
-    } catch (e) {
+
+      AppLogger.apiSuccess(
+        'loadMyBookRecordGroups(from MyRecordsScreen)',
+        detail: 'count=${items.length}',
+      );
+    } catch (e, st) {
+      AppLogger.apiError(
+        'loadMyBookRecordGroups(from MyRecordsScreen)',
+        e,
+        stackTrace: st,
+      );
       if (!mounted) return;
       showToast(context, '내 기록 조회 실패: $e');
     } finally {
@@ -53,12 +71,18 @@ class _MyRecordsScreenState extends State<MyRecordsScreen> {
       child: InkWell(
         borderRadius: BorderRadius.circular(12),
         onTap: () async {
+          AppLogger.action(
+            'OpenBookRecordsScreenFromMyRecords',
+            detail: 'bookId=${item.bookId}, title=${item.bookTitle}',
+          );
+
           await Navigator.push(
             context,
             MaterialPageRoute(
               builder: (_) => BookRecordsScreen(group: item),
             ),
           );
+
           await _loadItems();
         },
         child: Padding(
@@ -151,14 +175,7 @@ class _MyRecordsScreenState extends State<MyRecordsScreen> {
       child: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          const Text(
-            '내 기록',
-            style: TextStyle(
-              fontSize: 20,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          const SizedBox(height: 8),
+          
           Text(
             '내가 남긴 기록을 책별로 모아봅니다. 공개와 비공개 기록이 모두 포함됩니다. (${_items.length}권)',
             style: TextStyle(
@@ -174,16 +191,11 @@ class _MyRecordsScreenState extends State<MyRecordsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('내 기록'),
-      ),
-      body: Column(
-        children: [
-          const CurrentUserBanner(),
-          Expanded(child: _buildBody()),
-        ],
-      ),
+    return Column(
+      children: [
+        const CurrentUserBanner(),
+        Expanded(child: _buildBody()),
+      ],
     );
   }
 }

@@ -18,4 +18,26 @@ class MyBookRecordGroupItem {
     required this.privateCount,
     required this.latestCreatedAt,
   });
+
+  MyBookRecordGroupItem copyWith({
+    int? bookId,
+    String? bookTitle,
+    String? bookAuthor,
+    String? coverUrl,
+    int? totalCount,
+    int? publicCount,
+    int? privateCount,
+    DateTime? latestCreatedAt,
+  }) {
+    return MyBookRecordGroupItem(
+      bookId: bookId ?? this.bookId,
+      bookTitle: bookTitle ?? this.bookTitle,
+      bookAuthor: bookAuthor ?? this.bookAuthor,
+      coverUrl: coverUrl ?? this.coverUrl,
+      totalCount: totalCount ?? this.totalCount,
+      publicCount: publicCount ?? this.publicCount,
+      privateCount: privateCount ?? this.privateCount,
+      latestCreatedAt: latestCreatedAt ?? this.latestCreatedAt,
+    );
+  }
 }

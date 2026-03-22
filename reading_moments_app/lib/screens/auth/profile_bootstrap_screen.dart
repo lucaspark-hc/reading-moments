@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:reading_moments_app/core/log/app_logger.dart';
+import 'package:reading_moments_app/core/log/logged_state_mixin.dart';
 import 'package:reading_moments_app/core/supabase_client.dart';
 import 'package:reading_moments_app/screens/auth/login_screen.dart';
-import 'package:reading_moments_app/screens/meetings/meetings_list_screen.dart';
+import 'package:reading_moments_app/screens/main_shell.dart';
 import 'package:reading_moments_app/utils/app_utils.dart';
 
 class ProfileBootstrapScreen extends StatefulWidget {
@@ -11,10 +13,14 @@ class ProfileBootstrapScreen extends StatefulWidget {
   State<ProfileBootstrapScreen> createState() => _ProfileBootstrapScreenState();
 }
 
-class _ProfileBootstrapScreenState extends State<ProfileBootstrapScreen> {
+class _ProfileBootstrapScreenState extends State<ProfileBootstrapScreen>
+    with LoggedStateMixin<ProfileBootstrapScreen> {
   final _nickname = TextEditingController();
   bool _loading = true;
   String? _currentNick;
+
+  @override
+  String get screenName => 'ProfileBootstrapScreen';
 
   @override
   void initState() {
@@ -24,6 +30,9 @@ class _ProfileBootstrapScreenState extends State<ProfileBootstrapScreen> {
 
   Future<void> _loadMyProfile() async {
     setState(() => _loading = true);
+
+    AppLogger.apiStart('loadMyProfile');
+
     try {
       final uid = supabase.auth.currentUser?.id;
       if (uid == null) {
@@ -42,12 +51,19 @@ class _ProfileBootstrapScreenState extends State<ProfileBootstrapScreen> {
 
       if (nick != null && nick.trim().isNotEmpty) {
         if (!mounted) return;
+        AppLogger.info('Profile exists -> go MainShell(feed)');
         Navigator.pushReplacement(
           context,
-          MaterialPageRoute(builder: (_) => const MeetingsListScreen()),
+          MaterialPageRoute(builder: (_) => const MainShell()),
         );
       }
-    } catch (e) {
+
+      AppLogger.apiSuccess(
+        'loadMyProfile',
+        detail: 'hasNickname=${nick != null && nick.trim().isNotEmpty}',
+      );
+    } catch (e, st) {
+      AppLogger.apiError('loadMyProfile', e, stackTrace: st);
       if (!mounted) return;
       showToast(context, '프로필 조회 실패: $e');
     } finally {
@@ -63,6 +79,9 @@ class _ProfileBootstrapScreenState extends State<ProfileBootstrapScreen> {
     }
 
     setState(() => _loading = true);
+
+    AppLogger.action('SaveNickname', detail: 'nickname=$nick');
+
     try {
       final uid = supabase.auth.currentUser!.id;
 
@@ -76,9 +95,10 @@ class _ProfileBootstrapScreenState extends State<ProfileBootstrapScreen> {
 
       Navigator.pushReplacement(
         context,
-        MaterialPageRoute(builder: (_) => const MeetingsListScreen()),
+        MaterialPageRoute(builder: (_) => const MainShell()),
       );
-    } catch (e) {
+    } catch (e, st) {
+      AppLogger.apiError('saveNickname', e, stackTrace: st);
       if (!mounted) return;
       showToast(context, '닉네임 저장 실패: $e');
     } finally {
@@ -125,7 +145,7 @@ class _ProfileBootstrapScreenState extends State<ProfileBootstrapScreen> {
                 children: [
                   Text('로그인 계정: $email'),
                   const SizedBox(height: 14),
-                  const Text('독서모임에서 사용할 닉네임을 입력해 주세요.'),
+                  const Text('Reading Moments에서 사용할 닉네임을 입력해 주세요.'),
                   const SizedBox(height: 12),
                   TextField(
                     controller: _nickname,

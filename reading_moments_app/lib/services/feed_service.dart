@@ -1,263 +1,416 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../core/log/app_logger.dart';
 import '../core/supabase_client.dart';
-import '../models/book_feed_summary_item.dart';
-import '../models/feed_note_item.dart';
-import '../models/public_book_selection_item.dart';
+import '../models/book_model.dart';
+import '../models/book_selection_item.dart';
+import '../models/feed_moment_item.dart';
 
 class FeedService {
   final SupabaseClient _client = supabase;
 
-  Future<List<BookFeedSummaryItem>> loadBookFeedSummaries() async {
+  Future<Set<int>> _loadLikedMomentIds() async {
     final currentUser = _client.auth.currentUser;
+    if (currentUser == null) return <int>{};
 
-    Set<int> wishlistedBookIds = {};
+    final likedResponse = await _client
+        .from('moment_likes')
+        .select('moment_id')
+        .eq('user_id', currentUser.id);
 
-    if (currentUser != null) {
-      final wishlistResponse = await _client
-          .from('book_wishlist')
-          .select('book_id')
-          .eq('user_id', currentUser.id);
-
-      wishlistedBookIds = (wishlistResponse as List)
-          .map((e) => e['book_id'] as int)
-          .toSet();
-    }
-
-    final selectionsResponse = await _client
-        .from('book_selections')
-        .select('''
-          id,
-          book_id,
-          selection_reason,
-          created_at,
-          books:book_id (
-            id,
-            title,
-            author,
-            cover_url,
-            isbn
-          )
-        ''')
-        .eq('visibility', 'public')
-        .order('created_at', ascending: false);
-
-    final notesResponse = await _client
-        .from('reading_notes')
-        .select('''
-          id,
-          book_id,
-          quote_text,
-          note_text,
-          created_at,
-          books:book_id (
-            id,
-            title,
-            author,
-            cover_url,
-            isbn
-          )
-        ''')
-        .eq('visibility', 'public')
-        .order('created_at', ascending: false);
-
-    final selectionRows = (selectionsResponse as List).cast<Map<String, dynamic>>();
-    final noteRows = (notesResponse as List).cast<Map<String, dynamic>>();
-
-    final Map<int, Map<String, dynamic>> summaryMap = {};
-
-    void ensureBook({
-      required int bookId,
-      required Map<String, dynamic>? bookMap,
-    }) {
-      summaryMap.putIfAbsent(bookId, () {
-        return {
-          'bookId': bookId,
-          'bookTitle': (bookMap?['title'] ?? '-') as String,
-          'bookAuthor': bookMap?['author'] as String?,
-          'coverUrl': bookMap?['cover_url'] as String?,
-          'isbn': bookMap?['isbn'] as String?,
-          'publicSelectionCount': 0,
-          'publicNoteCount': 0,
-          'latestCreatedAt': DateTime.fromMillisecondsSinceEpoch(0),
-          'previewText': null,
-        };
-      });
-    }
-
-    for (final row in selectionRows) {
-      final bookId = row['book_id'] as int;
-      final bookMap = row['books'] as Map<String, dynamic>?;
-      final createdAt = DateTime.parse(row['created_at'] as String);
-      final reason = row['selection_reason'] as String?;
-
-      ensureBook(bookId: bookId, bookMap: bookMap);
-
-      final target = summaryMap[bookId]!;
-      target['publicSelectionCount'] = (target['publicSelectionCount'] as int) + 1;
-
-      final latestCreatedAt = target['latestCreatedAt'] as DateTime;
-      if (createdAt.isAfter(latestCreatedAt)) {
-        target['latestCreatedAt'] = createdAt;
-        target['previewText'] = reason;
-      }
-    }
-
-    for (final row in noteRows) {
-      final bookId = row['book_id'] as int;
-      final bookMap = row['books'] as Map<String, dynamic>?;
-      final createdAt = DateTime.parse(row['created_at'] as String);
-      final quoteText = row['quote_text'] as String?;
-      final noteText = row['note_text'] as String?;
-      final preview = (noteText ?? '').trim().isNotEmpty ? noteText : quoteText;
-
-      ensureBook(bookId: bookId, bookMap: bookMap);
-
-      final target = summaryMap[bookId]!;
-      target['publicNoteCount'] = (target['publicNoteCount'] as int) + 1;
-
-      final latestCreatedAt = target['latestCreatedAt'] as DateTime;
-      if (createdAt.isAfter(latestCreatedAt)) {
-        target['latestCreatedAt'] = createdAt;
-        target['previewText'] = preview;
-      }
-    }
-
-    final result = summaryMap.values.map((e) {
-      final bookId = e['bookId'] as int;
-      return BookFeedSummaryItem(
-        bookId: bookId,
-        bookTitle: e['bookTitle'] as String,
-        bookAuthor: e['bookAuthor'] as String?,
-        coverUrl: e['coverUrl'] as String?,
-        isbn: e['isbn'] as String?,
-        publicSelectionCount: e['publicSelectionCount'] as int,
-        publicNoteCount: e['publicNoteCount'] as int,
-        latestCreatedAt: e['latestCreatedAt'] as DateTime,
-        previewText: e['previewText'] as String?,
-        isWishlisted: wishlistedBookIds.contains(bookId),
-      );
-    }).toList();
-
-    result.sort((a, b) => b.latestCreatedAt.compareTo(a.latestCreatedAt));
-    return result;
+    return (likedResponse as List)
+        .map((e) => (e['moment_id'] as num).toInt())
+        .toSet();
   }
 
-  Future<List<PublicBookSelectionItem>> loadPublicSelectionsByBook(int bookId) async {
+  Future<Set<int>> _loadWishlistedBookIds() async {
+    final currentUser = _client.auth.currentUser;
+    if (currentUser == null) return <int>{};
+
     final response = await _client
-        .from('book_selections')
-        .select('''
-          id,
-          user_id,
-          book_id,
-          book_description,
-          selection_reason,
-          visibility,
-          meeting_id,
-          created_at,
-          users:user_id (
-            nickname
-          ),
-          books:book_id (
-            title,
-            author,
-            cover_url,
-            isbn
-          )
-        ''')
-        .eq('visibility', 'public')
-        .eq('book_id', bookId)
-        .order('created_at', ascending: false);
+        .from('book_wishlist')
+        .select('book_id')
+        .eq('user_id', currentUser.id);
 
     return (response as List)
-        .map((e) => PublicBookSelectionItem.fromMap(e as Map<String, dynamic>))
-        .toList();
+        .map((e) => (e['book_id'] as num).toInt())
+        .toSet();
   }
 
-  Future<List<FeedNoteItem>> loadPublicFeedByBook(int bookId) async {
-    final currentUser = _client.auth.currentUser;
+  Future<Map<String, String>> _loadNicknames(List<Map<String, dynamic>> rows) async {
+    final userIds = rows
+        .map((e) => e['user_id'])
+        .whereType<String>()
+        .toSet()
+        .toList();
 
-    Set<int> likedNoteIds = {};
-    Map<int, int> likeCountMap = {};
+    if (userIds.isEmpty) return {};
 
-    if (currentUser != null) {
-      final likedResponse = await _client
-          .from('note_likes')
-          .select('note_id')
-          .eq('user_id', currentUser.id);
+    final userResponse = await _client
+        .from('users')
+        .select('id, nickname')
+        .inFilter('id', userIds);
 
-      likedNoteIds = (likedResponse as List)
-          .map((e) => e['note_id'] as int)
-          .toSet();
-    }
+    final userRows = (userResponse as List)
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
 
-    final likeCountResponse = await _client.from('note_likes').select('note_id');
+    return {
+      for (final row in userRows)
+        row['id'] as String: ((row['nickname'] ?? '알 수 없음') as String),
+    };
+  }
 
-    for (final row in (likeCountResponse as List)) {
-      final noteId = row['note_id'] as int;
-      likeCountMap[noteId] = (likeCountMap[noteId] ?? 0) + 1;
-    }
+  Future<Map<int, Map<String, dynamic>>> _loadBooksByIds(
+    List<Map<String, dynamic>> rows,
+  ) async {
+    final bookIds = rows
+        .map((e) => e['book_id'])
+        .whereType<num>()
+        .map((e) => e.toInt())
+        .toSet()
+        .toList();
 
-    final response = await _client
-        .from('reading_notes')
-        .select('''
-          id,
-          user_id,
-          book_id,
-          type,
-          quote_text,
-          note_text,
-          visibility,
-          page,
-          created_at,
-          users:user_id (
-            nickname
-          ),
-          books:book_id (
-            title,
-            author
-          )
-        ''')
-        .eq('visibility', 'public')
-        .eq('book_id', bookId)
-        .order('created_at', ascending: false);
+    if (bookIds.isEmpty) return {};
 
-    final rows = (response as List).cast<Map<String, dynamic>>();
+    final bookResponse = await _client
+        .from('books')
+        .select('id, isbn, title, author, cover_url, category, description')
+        .inFilter('id', bookIds);
 
-    return rows
+    final bookRows = (bookResponse as List)
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
+
+    return {
+      for (final row in bookRows) (row['id'] as num).toInt(): row,
+    };
+  }
+
+  List<FeedMomentItem> _mapFeedMoments(
+    List<Map<String, dynamic>> rows, {
+    required Set<int> likedMomentIds,
+    required Set<int> wishlistedBookIds,
+    required Map<String, String> nicknameByUserId,
+    required Map<int, Map<String, dynamic>> bookById,
+  }) {
+    final mappedRows = rows.map((row) {
+      final userId = row['user_id'] as String;
+      final bookId = (row['book_id'] as num).toInt();
+      final book = bookById[bookId];
+
+      return <String, dynamic>{
+        ...row,
+        'users': <String, dynamic>{
+          'nickname': nicknameByUserId[userId] ?? '알 수 없음',
+        },
+        'books': <String, dynamic>{
+          'title': (book?['title'] ?? '-') as String,
+          'author': book?['author'] as String?,
+          'cover_url': book?['cover_url'] as String?,
+        },
+      };
+    }).toList();
+
+    return mappedRows
         .map(
-          (e) => FeedNoteItem.fromMap(
+          (e) => FeedMomentItem.fromMap(
             e,
-            savedNoteIds: const <int>{},
-            likedNoteIds: likedNoteIds,
-            likeCountMap: likeCountMap,
+            likedMomentIds: likedMomentIds,
+            wishlistedBookIds: wishlistedBookIds,
           ),
         )
         .toList();
   }
 
-  Future<void> likeNote(int noteId) async {
+  Future<List<FeedMomentItem>> loadPublicMoments() async {
     final currentUser = _client.auth.currentUser;
-    if (currentUser == null) {
-      throw Exception('로그인이 필요합니다.');
-    }
 
-    await _client.from('note_likes').insert({
-      'user_id': currentUser.id,
-      'note_id': noteId,
-    });
+    AppLogger.apiStart(
+      'loadPublicMoments',
+      detail: 'userId=${currentUser?.id ?? 'guest'}',
+    );
+
+    try {
+      final likedMomentIds = await _loadLikedMomentIds();
+      final wishlistedBookIds = await _loadWishlistedBookIds();
+
+      final response = await _client
+          .from('reading_moments')
+          .select('''
+            id,
+            user_id,
+            book_id,
+            type,
+            quote_text,
+            note_text,
+            visibility,
+            page,
+            created_at,
+            like_count
+          ''')
+          .eq('visibility', 'public')
+          .order('created_at', ascending: false);
+
+      final rows =
+          (response as List).map((e) => Map<String, dynamic>.from(e)).toList();
+
+      if (rows.isEmpty) {
+        AppLogger.apiSuccess('loadPublicMoments', detail: 'count=0');
+        return [];
+      }
+
+      final nicknameByUserId = await _loadNicknames(rows);
+      final bookById = await _loadBooksByIds(rows);
+
+      final result = _mapFeedMoments(
+        rows,
+        likedMomentIds: likedMomentIds,
+        wishlistedBookIds: wishlistedBookIds,
+        nicknameByUserId: nicknameByUserId,
+        bookById: bookById,
+      );
+
+      AppLogger.apiSuccess(
+        'loadPublicMoments',
+        detail: 'count=${result.length}',
+      );
+
+      return result;
+    } catch (e, st) {
+      AppLogger.apiError('loadPublicMoments', e, stackTrace: st);
+      rethrow;
+    }
   }
 
-  Future<void> unlikeNote(int noteId) async {
+  Future<List<FeedMomentItem>> loadPublicMomentsByBook(int bookId) async {
+    final currentUser = _client.auth.currentUser;
+
+    AppLogger.apiStart(
+      'loadPublicMomentsByBook',
+      detail: 'bookId=$bookId, userId=${currentUser?.id ?? 'guest'}',
+    );
+
+    try {
+      final likedMomentIds = await _loadLikedMomentIds();
+      final wishlistedBookIds = await _loadWishlistedBookIds();
+
+      final response = await _client
+          .from('reading_moments')
+          .select('''
+            id,
+            user_id,
+            book_id,
+            type,
+            quote_text,
+            note_text,
+            visibility,
+            page,
+            created_at,
+            like_count
+          ''')
+          .eq('visibility', 'public')
+          .eq('book_id', bookId)
+          .order('created_at', ascending: false);
+
+      final rows =
+          (response as List).map((e) => Map<String, dynamic>.from(e)).toList();
+
+      if (rows.isEmpty) {
+        AppLogger.apiSuccess('loadPublicMomentsByBook', detail: 'count=0');
+        return [];
+      }
+
+      final nicknameByUserId = await _loadNicknames(rows);
+      final bookById = await _loadBooksByIds(rows);
+
+      final result = _mapFeedMoments(
+        rows,
+        likedMomentIds: likedMomentIds,
+        wishlistedBookIds: wishlistedBookIds,
+        nicknameByUserId: nicknameByUserId,
+        bookById: bookById,
+      );
+
+      AppLogger.apiSuccess(
+        'loadPublicMomentsByBook',
+        detail: 'count=${result.length}',
+      );
+
+      return result;
+    } catch (e, st) {
+      AppLogger.apiError('loadPublicMomentsByBook', e, stackTrace: st);
+      rethrow;
+    }
+  }
+
+  Future<BookModel> loadBookById(int bookId) async {
+    AppLogger.apiStart('loadBookById', detail: 'bookId=$bookId');
+
+    try {
+      final response = await _client
+          .from('books')
+          .select('id, isbn, title, author, cover_url, category, description')
+          .eq('id', bookId)
+          .single();
+
+      final result = BookModel.fromJson(Map<String, dynamic>.from(response));
+
+      AppLogger.apiSuccess(
+        'loadBookById',
+        detail: 'bookId=${result.id}, title=${result.title}',
+      );
+
+      return result;
+    } catch (e, st) {
+      AppLogger.apiError('loadBookById', e, stackTrace: st);
+      rethrow;
+    }
+  }
+
+  Future<List<BookSelectionItem>> loadPublicSelectionsByBook(int bookId) async {
+    AppLogger.apiStart(
+      'loadPublicSelectionsByBook',
+      detail: 'bookId=$bookId',
+    );
+
+    try {
+      final response = await _client
+          .from('book_selections')
+          .select('''
+            id,
+            user_id,
+            book_id,
+            book_description,
+            selection_reason,
+            visibility,
+            meeting_id,
+            created_at,
+            users:user_id (
+              nickname
+            ),
+            books:book_id (
+              title,
+              author,
+              cover_url,
+              isbn
+            )
+          ''')
+          .eq('visibility', 'public')
+          .eq('book_id', bookId)
+          .order('created_at', ascending: false);
+
+      final result = (response as List)
+          .map((e) => BookSelectionItem.fromMap(e as Map<String, dynamic>))
+          .toList();
+
+      AppLogger.apiSuccess(
+        'loadPublicSelectionsByBook',
+        detail: 'count=${result.length}',
+      );
+
+      return result;
+    } catch (e, st) {
+      AppLogger.apiError('loadPublicSelectionsByBook', e, stackTrace: st);
+      rethrow;
+    }
+  }
+
+  Future<void> addBookToWishlist(int bookId) async {
     final currentUser = _client.auth.currentUser;
     if (currentUser == null) {
       throw Exception('로그인이 필요합니다.');
     }
 
-    await _client
-        .from('note_likes')
-        .delete()
-        .eq('user_id', currentUser.id)
-        .eq('note_id', noteId);
+    AppLogger.apiStart(
+      'addBookToWishlist',
+      detail: 'bookId=$bookId, userId=${currentUser.id}',
+    );
+
+    try {
+      await _client.from('book_wishlist').insert({
+        'user_id': currentUser.id,
+        'book_id': bookId,
+      });
+
+      AppLogger.apiSuccess('addBookToWishlist', detail: 'bookId=$bookId');
+    } catch (e, st) {
+      AppLogger.apiError('addBookToWishlist', e, stackTrace: st);
+      rethrow;
+    }
+  }
+
+  Future<void> removeBookFromWishlist(int bookId) async {
+    final currentUser = _client.auth.currentUser;
+    if (currentUser == null) {
+      throw Exception('로그인이 필요합니다.');
+    }
+
+    AppLogger.apiStart(
+      'removeBookFromWishlist',
+      detail: 'bookId=$bookId, userId=${currentUser.id}',
+    );
+
+    try {
+      await _client
+          .from('book_wishlist')
+          .delete()
+          .eq('user_id', currentUser.id)
+          .eq('book_id', bookId);
+
+      AppLogger.apiSuccess('removeBookFromWishlist', detail: 'bookId=$bookId');
+    } catch (e, st) {
+      AppLogger.apiError('removeBookFromWishlist', e, stackTrace: st);
+      rethrow;
+    }
+  }
+
+  Future<void> likeMoment(int momentId) async {
+    final currentUser = _client.auth.currentUser;
+    if (currentUser == null) {
+      throw Exception('로그인이 필요합니다.');
+    }
+
+    AppLogger.apiStart(
+      'likeMoment',
+      detail: 'momentId=$momentId, userId=${currentUser.id}',
+    );
+
+    try {
+      await _client.from('moment_likes').insert({
+        'user_id': currentUser.id,
+        'moment_id': momentId,
+      });
+
+      AppLogger.apiSuccess('likeMoment', detail: 'momentId=$momentId');
+    } catch (e, st) {
+      AppLogger.apiError('likeMoment', e, stackTrace: st);
+      rethrow;
+    }
+  }
+
+  Future<void> unlikeMoment(int momentId) async {
+    final currentUser = _client.auth.currentUser;
+    if (currentUser == null) {
+      throw Exception('로그인이 필요합니다.');
+    }
+
+    AppLogger.apiStart(
+      'unlikeMoment',
+      detail: 'momentId=$momentId, userId=${currentUser.id}',
+    );
+
+    try {
+      await _client
+          .from('moment_likes')
+          .delete()
+          .eq('user_id', currentUser.id)
+          .eq('moment_id', momentId);
+
+      AppLogger.apiSuccess('unlikeMoment', detail: 'momentId=$momentId');
+    } catch (e, st) {
+      AppLogger.apiError('unlikeMoment', e, stackTrace: st);
+      rethrow;
+    }
   }
 }

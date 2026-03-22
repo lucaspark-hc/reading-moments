@@ -1,16 +1,11 @@
 import 'package:flutter/material.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:reading_moments_app/core/log/app_logger.dart';
+import 'package:reading_moments_app/core/log/logged_state_mixin.dart';
 import 'package:reading_moments_app/core/supabase_client.dart';
 import 'package:reading_moments_app/models/meeting_model.dart';
-import 'package:reading_moments_app/models/test_account.dart';
-import 'package:reading_moments_app/screens/auth/login_screen.dart';
-import 'package:reading_moments_app/screens/auth/profile_bootstrap_screen.dart';
-import 'package:reading_moments_app/screens/feed/feed_screen.dart';
-import 'package:reading_moments_app/screens/library/my_library_screen.dart';
 import 'package:reading_moments_app/screens/meetings/create_meeting_screen.dart';
 import 'package:reading_moments_app/screens/meetings/edit_meeting_screen.dart';
 import 'package:reading_moments_app/screens/meetings/meeting_detail_screen.dart';
-import 'package:reading_moments_app/screens/records/my_records_screen.dart';
 import 'package:reading_moments_app/services/meetings_service.dart';
 import 'package:reading_moments_app/utils/app_utils.dart';
 import 'package:reading_moments_app/widgets/current_user_banner.dart';
@@ -24,12 +19,18 @@ class MeetingsListScreen extends StatefulWidget {
   State<MeetingsListScreen> createState() => _MeetingsListScreenState();
 }
 
-class _MeetingsListScreenState extends State<MeetingsListScreen> {
+class _MeetingsListScreenState extends State<MeetingsListScreen>
+    with LoggedStateMixin<MeetingsListScreen> {
   final MeetingsService _meetingsService = MeetingsService();
 
   bool _loading = true;
+  bool _openingMeetingPicker = false;
+
   List<MeetingModel> _meetings = [];
   MeetingsFilterType _filterType = MeetingsFilterType.activeAll;
+
+  @override
+  String get screenName => 'MeetingsListScreen';
 
   @override
   void initState() {
@@ -38,48 +39,40 @@ class _MeetingsListScreenState extends State<MeetingsListScreen> {
   }
 
   Future<void> _loadMeetings() async {
+    final currentUid = supabase.auth.currentUser?.id;
+
+    AppLogger.apiStart(
+      'loadMeetings',
+      detail: 'userId=${currentUid ?? 'null'}, filter=${_filterType.name}',
+    );
+    debugPrint(
+      '[MeetingsListScreen] loadMeetings start '
+      'userId=${currentUid ?? 'null'} filter=${_filterType.name}',
+    );
+
     setState(() => _loading = true);
+
     try {
       _meetings = await _meetingsService.loadMeetings();
-    } catch (e) {
+
+      AppLogger.apiSuccess(
+        'loadMeetings',
+        detail: 'count=${_meetings.length}, filter=${_filterType.name}',
+      );
+      debugPrint(
+        '[MeetingsListScreen] loadMeetings success '
+        'count=${_meetings.length} filter=${_filterType.name}',
+      );
+    } catch (e, st) {
+      AppLogger.apiError('loadMeetings', e, stackTrace: st);
+      debugPrint('[MeetingsListScreen] loadMeetings error: $e');
       if (!mounted) return;
       showToast(context, '모임 목록 조회 실패: $e');
     } finally {
       if (mounted) {
         setState(() => _loading = false);
       }
-    }
-  }
-
-  Future<void> _signOut() async {
-    await supabase.auth.signOut();
-    if (!mounted) return;
-    Navigator.pushAndRemoveUntil(
-      context,
-      MaterialPageRoute(builder: (_) => const LoginScreen()),
-      (_) => false,
-    );
-  }
-
-  Future<void> _switchTo(TestAccount acc) async {
-    try {
-      await supabase.auth.signOut();
-      await supabase.auth.signInWithPassword(
-        email: acc.email.trim().toLowerCase(),
-        password: acc.password.trim(),
-      );
-      if (!mounted) return;
-      Navigator.pushAndRemoveUntil(
-        context,
-        MaterialPageRoute(builder: (_) => const ProfileBootstrapScreen()),
-        (_) => false,
-      );
-    } on AuthException catch (e) {
-      if (!mounted) return;
-      showToast(context, '계정 전환 실패: ${e.message}');
-    } catch (e) {
-      if (!mounted) return;
-      showToast(context, '계정 전환 실패: $e');
+      debugPrint('[MeetingsListScreen] loadMeetings end');
     }
   }
 
@@ -123,7 +116,7 @@ class _MeetingsListScreenState extends State<MeetingsListScreen> {
       case 'closed':
         return scheme.surfaceContainerHighest;
       case 'finished':
-        return scheme.secondaryContainer.withValues(alpha: 0.7);
+        return scheme.secondaryContainer.withOpacity(0.7);
       case 'open':
       case 'in_progress':
       default:
@@ -180,12 +173,15 @@ class _MeetingsListScreenState extends State<MeetingsListScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.12),
+        color: color.withOpacity(0.12),
         borderRadius: BorderRadius.circular(999),
       ),
       child: Text(
         _getStatusLabel(meeting),
-        style: TextStyle(color: color, fontWeight: FontWeight.w600),
+        style: TextStyle(
+          color: color,
+          fontWeight: FontWeight.w600,
+        ),
       ),
     );
   }
@@ -213,8 +209,19 @@ class _MeetingsListScreenState extends State<MeetingsListScreen> {
         ],
         selected: {_filterType},
         onSelectionChanged: (selected) {
+          final next = selected.first;
+
+          AppLogger.action(
+            'ChangeMeetingsFilter',
+            detail: 'from=${_filterType.name}, to=${next.name}',
+          );
+          debugPrint(
+            '[MeetingsListScreen] changeFilter '
+            'from=${_filterType.name} to=${next.name}',
+          );
+
           setState(() {
-            _filterType = selected.first;
+            _filterType = next;
           });
         },
       ),
@@ -222,9 +229,19 @@ class _MeetingsListScreenState extends State<MeetingsListScreen> {
   }
 
   Future<void> _editMeeting(MeetingModel meeting) async {
+    AppLogger.action(
+      'EditMeetingFromList',
+      detail: 'meetingId=${meeting.id}, title=${meeting.title}',
+    );
+    debugPrint(
+      '[MeetingsListScreen] editMeeting meetingId=${meeting.id} title=${meeting.title}',
+    );
+
     final updated = await Navigator.push<bool>(
       context,
-      MaterialPageRoute(builder: (_) => EditMeetingScreen(meeting: meeting)),
+      MaterialPageRoute(
+        builder: (_) => EditMeetingScreen(meeting: meeting),
+      ),
     );
 
     if (updated == true) {
@@ -255,12 +272,31 @@ class _MeetingsListScreenState extends State<MeetingsListScreen> {
 
     if (confirmed != true) return;
 
+    AppLogger.action(
+      'DeleteMeetingFromList',
+      detail: 'meetingId=${meeting.id}, title=${meeting.title}',
+    );
+    debugPrint(
+      '[MeetingsListScreen] deleteMeeting meetingId=${meeting.id} title=${meeting.title}',
+    );
+
     try {
       await _meetingsService.deleteMeeting(meeting.id);
+
+      AppLogger.apiSuccess(
+        'deleteMeeting',
+        detail: 'meetingId=${meeting.id}',
+      );
+      debugPrint(
+        '[MeetingsListScreen] deleteMeeting success meetingId=${meeting.id}',
+      );
+
       if (!mounted) return;
       showToast(context, '모임이 삭제되었습니다.');
       await _loadMeetings();
-    } catch (e) {
+    } catch (e, st) {
+      AppLogger.apiError('deleteMeeting', e, stackTrace: st);
+      debugPrint('[MeetingsListScreen] deleteMeeting error: $e');
       if (!mounted) return;
       showToast(context, '모임 삭제 실패: $e');
     }
@@ -281,10 +317,72 @@ class _MeetingsListScreenState extends State<MeetingsListScreen> {
         }
       },
       itemBuilder: (context) => const [
-        PopupMenuItem(value: 'edit', child: Text('수정')),
-        PopupMenuItem(value: 'delete', child: Text('삭제')),
+        PopupMenuItem<String>(
+          value: 'edit',
+          child: Text('수정'),
+        ),
+        PopupMenuItem<String>(
+          value: 'delete',
+          child: Text('삭제'),
+        ),
       ],
     );
+  }
+
+  Future<void> _openMeetingDetail(MeetingModel meeting) async {
+    AppLogger.action(
+      'OpenMeetingDetailFromList',
+      detail: 'meetingId=${meeting.id}, title=${meeting.title}',
+    );
+    debugPrint(
+      '[MeetingsListScreen] openMeetingDetail '
+      'meetingId=${meeting.id} title=${meeting.title}',
+    );
+
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => MeetingDetailScreen(meeting: meeting),
+      ),
+    );
+
+    await _loadMeetings();
+  }
+
+  Future<void> _openMeetingCreateFlow() async {
+    if (_openingMeetingPicker) return;
+
+    AppLogger.action(
+      'OpenMeetingCreateFab',
+      detail: 'filter=${_filterType.name}',
+    );
+    debugPrint(
+      '[MeetingsListScreen] openMeetingCreateFab filter=${_filterType.name}',
+    );
+
+    setState(() {
+      _openingMeetingPicker = true;
+    });
+
+    try {
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => const CreateMeetingScreen(
+            startInMeetingMode: true,
+          ),
+        ),
+      );
+
+      await _loadMeetings();
+    } finally {
+      if (mounted) {
+        setState(() {
+          _openingMeetingPicker = false;
+        });
+      }
+      debugPrint('[MeetingsListScreen] openMeetingCreateFab end');
+    }
   }
 
   Widget _buildMeetingCard(
@@ -298,13 +396,7 @@ class _MeetingsListScreenState extends State<MeetingsListScreen> {
       child: InkWell(
         borderRadius: BorderRadius.circular(12),
         onTap: () async {
-          await Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (_) => MeetingDetailScreen(meeting: meeting),
-            ),
-          );
-          _loadMeetings();
+          await _openMeetingDetail(meeting);
         },
         child: Padding(
           padding: const EdgeInsets.fromLTRB(16, 14, 12, 14),
@@ -333,9 +425,7 @@ class _MeetingsListScreenState extends State<MeetingsListScreen> {
               ),
               const SizedBox(height: 10),
               if (meeting.book != null)
-                Text(
-                  '책: ${meeting.book!.title} / ${meeting.book!.author ?? "-"}',
-                ),
+                Text('책: ${meeting.book!.title} / ${meeting.book!.author ?? "-"}'),
               Text('일시: ${formatDateTime(meeting.meetingDate)}'),
               Text('장소: ${meeting.location ?? "-"}'),
               if (meeting.hostReason != null &&
@@ -363,62 +453,6 @@ class _MeetingsListScreenState extends State<MeetingsListScreen> {
     final filteredMeetings = _getFilteredMeetings(currentUid);
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('독서모임 리스트'),
-        actions: [
-          IconButton(
-            onPressed: () async {
-              await Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const FeedScreen()),
-              );
-            },
-            icon: const Icon(Icons.dynamic_feed),
-            tooltip: '공개 피드',
-          ),
-          IconButton(
-            onPressed: () async {
-              await Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const MyRecordsScreen()),
-              );
-            },
-            icon: const Icon(Icons.edit_note),
-            tooltip: '내 기록',
-          ),
-          IconButton(
-            onPressed: () async {
-              await Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const MyLibraryScreen()),
-              );
-            },
-            icon: const Icon(Icons.library_books),
-            tooltip: '내 라이브러리',
-          ),
-          PopupMenuButton<String>(
-            icon: const Icon(Icons.switch_account),
-            onSelected: (v) async {
-              if (v == 'logout') {
-                await _signOut();
-                return;
-              }
-              final acc = kTestAccounts.firstWhere((a) => a.label == v);
-              await _switchTo(acc);
-            },
-            itemBuilder: (context) => [
-              const PopupMenuItem(value: 'logout', child: Text('로그아웃')),
-              const PopupMenuDivider(),
-              ...kTestAccounts.map(
-                (a) => PopupMenuItem(
-                  value: a.label,
-                  child: Text('${a.label}로 전환'),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
       body: Column(
         children: [
           const CurrentUserBanner(),
@@ -427,35 +461,37 @@ class _MeetingsListScreenState extends State<MeetingsListScreen> {
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
                 : filteredMeetings.isEmpty
-                ? Center(child: Text(_getEmptyMessage()))
-                : RefreshIndicator(
-                    onRefresh: _loadMeetings,
-                    child: ListView.builder(
-                      itemCount: filteredMeetings.length,
-                      itemBuilder: (context, i) {
-                        final meeting = filteredMeetings[i];
-                        final isHost =
-                            meeting.isHost ||
-                            (currentUid != null &&
-                                currentUid == meeting.hostId);
+                    ? Center(child: Text(_getEmptyMessage()))
+                    : RefreshIndicator(
+                        onRefresh: _loadMeetings,
+                        child: ListView.builder(
+                          itemCount: filteredMeetings.length,
+                          itemBuilder: (context, i) {
+                            final meeting = filteredMeetings[i];
+                            final isHost = meeting.isHost ||
+                                (currentUid != null &&
+                                    currentUid == meeting.hostId);
 
-                        return _buildMeetingCard(context, meeting, isHost);
-                      },
-                    ),
-                  ),
+                            return _buildMeetingCard(context, meeting, isHost);
+                          },
+                        ),
+                      ),
           ),
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: () async {
-          await Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => const CreateMeetingScreen()),
-          );
-          _loadMeetings();
-        },
-        label: const Text('책 고르기'),
-        icon: const Icon(Icons.add),
+        onPressed: _openingMeetingPicker ? null : _openMeetingCreateFlow,
+        icon: _openingMeetingPicker
+            ? const SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: Colors.white,
+                ),
+              )
+            : const Icon(Icons.add),
+        label: const Text('모임만들기'),
       ),
     );
   }

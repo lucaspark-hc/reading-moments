@@ -3,29 +3,30 @@ class MomentModel {
   final String userId;
   final int bookId;
   final int? meetingId;
-
-  final String type;
-  final String quoteText;
+  final String? quoteText;
+  final String? explainText;
   final String? noteText;
-
   final int? page;
   final String visibility;
+  final String type;
   final String inputMethod;
-
+  final int likeCount;
   final DateTime createdAt;
   final DateTime? updatedAt;
 
-  MomentModel({
+  const MomentModel({
     required this.id,
     required this.userId,
     required this.bookId,
     required this.meetingId,
-    required this.type,
     required this.quoteText,
+    required this.explainText,
     required this.noteText,
     required this.page,
     required this.visibility,
+    required this.type,
     required this.inputMethod,
+    required this.likeCount,
     required this.createdAt,
     required this.updatedAt,
   });
@@ -36,63 +37,18 @@ class MomentModel {
       userId: json['user_id'] as String,
       bookId: json['book_id'] as int,
       meetingId: json['meeting_id'] as int?,
-      type: (json['type'] ?? 'quote') as String,
-      quoteText: (json['quote_text'] ?? '') as String,
+      quoteText: json['quote_text'] as String?,
+      explainText: json['explain_text'] as String?,
       noteText: json['note_text'] as String?,
       page: json['page'] as int?,
       visibility: (json['visibility'] ?? 'private') as String,
+      type: (json['type'] ?? 'quote') as String,
       inputMethod: (json['input_method'] ?? 'manual') as String,
+      likeCount: (json['like_count'] ?? 0) as int,
       createdAt: DateTime.parse(json['created_at'] as String),
       updatedAt: json['updated_at'] != null
-          ? DateTime.tryParse(json['updated_at'] as String)
+          ? DateTime.parse(json['updated_at'] as String)
           : null,
-    );
-  }
-
-  Map<String, dynamic> toJson() {
-    return {
-      'id': id,
-      'user_id': userId,
-      'book_id': bookId,
-      'meeting_id': meetingId,
-      'type': type,
-      'quote_text': quoteText,
-      'note_text': noteText,
-      'page': page,
-      'visibility': visibility,
-      'input_method': inputMethod,
-      'created_at': createdAt.toIso8601String(),
-      'updated_at': updatedAt?.toIso8601String(),
-    };
-  }
-
-  MomentModel copyWith({
-    int? id,
-    String? userId,
-    int? bookId,
-    int? meetingId,
-    String? type,
-    String? quoteText,
-    String? noteText,
-    int? page,
-    String? visibility,
-    String? inputMethod,
-    DateTime? createdAt,
-    DateTime? updatedAt,
-  }) {
-    return MomentModel(
-      id: id ?? this.id,
-      userId: userId ?? this.userId,
-      bookId: bookId ?? this.bookId,
-      meetingId: meetingId ?? this.meetingId,
-      type: type ?? this.type,
-      quoteText: quoteText ?? this.quoteText,
-      noteText: noteText ?? this.noteText,
-      page: page ?? this.page,
-      visibility: visibility ?? this.visibility,
-      inputMethod: inputMethod ?? this.inputMethod,
-      createdAt: createdAt ?? this.createdAt,
-      updatedAt: updatedAt ?? this.updatedAt,
     );
   }
 }

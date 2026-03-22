@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-
-import '../screens/auth/auth_gate.dart';
+import 'package:reading_moments_app/core/log/app_route_observer.dart';
+import 'package:reading_moments_app/screens/auth/login_screen.dart';
 
 class ReadingMomentsApp extends StatelessWidget {
   const ReadingMomentsApp({super.key});
@@ -8,13 +8,14 @@ class ReadingMomentsApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      title: 'Reading Moments',
       debugShowCheckedModeBanner: false,
-      title: 'ReadingMoments',
+      navigatorObservers: [appRouteObserver],
       theme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
         useMaterial3: true,
-        colorSchemeSeed: Colors.indigo,
       ),
-      home: const AuthGate(),
+      home: const LoginScreen(),
     );
   }
 }

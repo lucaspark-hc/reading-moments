@@ -1,14 +1,14 @@
 import 'package:flutter/material.dart';
-import 'package:reading_moments_app/models/book_model.dart';
+import 'package:reading_moments_app/core/log/app_logger.dart';
+import 'package:reading_moments_app/core/log/logged_state_mixin.dart';
 import 'package:reading_moments_app/models/book_selection_item.dart';
 import 'package:reading_moments_app/models/my_book_record_group_item.dart';
-import 'package:reading_moments_app/screens/books/add_note_screen.dart';
 import 'package:reading_moments_app/screens/meetings/create_meeting_from_selection_screen.dart';
 import 'package:reading_moments_app/screens/records/book_records_screen.dart';
 import 'package:reading_moments_app/services/my_records_service.dart';
 import 'package:reading_moments_app/utils/app_utils.dart';
 
-class BookSelectionDetailScreen extends StatelessWidget {
+class BookSelectionDetailScreen extends StatefulWidget {
   final BookSelectionItem selection;
 
   const BookSelectionDetailScreen({
@@ -16,31 +16,87 @@ class BookSelectionDetailScreen extends StatelessWidget {
     required this.selection,
   });
 
+  @override
+  State<BookSelectionDetailScreen> createState() =>
+      _BookSelectionDetailScreenState();
+}
+
+class _BookSelectionDetailScreenState extends State<BookSelectionDetailScreen>
+    with LoggedStateMixin<BookSelectionDetailScreen> {
+  @override
+  String get screenName => 'BookSelectionDetailScreen';
+
   Future<MyBookRecordGroupItem?> _findBookRecordGroup(int bookId) async {
+    AppLogger.apiStart(
+      'loadMyBookRecordGroups',
+      detail: 'find group by bookId=$bookId',
+    );
+
     final service = MyRecordsService();
     final groups = await service.loadMyBookRecordGroups();
+
     for (final group in groups) {
       if (group.bookId == bookId) {
+        AppLogger.apiSuccess(
+          'loadMyBookRecordGroups',
+          detail: 'matched bookId=$bookId totalCount=${group.totalCount}',
+        );
         return group;
       }
     }
+
+    AppLogger.info('No existing record group found for bookId=$bookId');
     return null;
+  }
+
+  MyBookRecordGroupItem _buildFallbackGroup() {
+    final selection = widget.selection;
+
+    return MyBookRecordGroupItem(
+      bookId: selection.bookId,
+      bookTitle: selection.bookTitle,
+      bookAuthor: selection.bookAuthor,
+      coverUrl: selection.coverUrl,
+      totalCount: 0,
+      publicCount: 0,
+      privateCount: 0,
+      latestCreatedAt: DateTime.now(),
+    );
+  }
+
+  Future<void> _goToBookRecords() async {
+    final selection = widget.selection;
+
+    AppLogger.action(
+      'GoToBookRecordsFromSelection',
+      detail: 'bookId=${selection.bookId}, title=${selection.bookTitle}',
+    );
+
+    try {
+      final foundGroup = await _findBookRecordGroup(selection.bookId);
+      final group = foundGroup ?? _buildFallbackGroup();
+
+      if (!mounted) return;
+
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => BookRecordsScreen(group: group),
+        ),
+      );
+    } catch (e, st) {
+      AppLogger.apiError('GoToBookRecordsFromSelection', e, stackTrace: st);
+      if (!mounted) return;
+      showToast(context, '책별 내 기록 화면 이동 실패: $e');
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    final selection = widget.selection;
     final hasAuthor = (selection.bookAuthor ?? '').trim().isNotEmpty;
     final hasDescription = (selection.bookDescription ?? '').trim().isNotEmpty;
     final isPublic = selection.visibility == 'public';
-
-    final book = BookModel(
-      id: selection.bookId,
-      isbn: selection.isbn ?? '',
-      title: selection.bookTitle,
-      author: selection.bookAuthor,
-      coverUrl: selection.coverUrl,
-      category: null,
-    );
 
     return Scaffold(
       appBar: AppBar(
@@ -175,36 +231,7 @@ class BookSelectionDetailScreen extends StatelessWidget {
           SizedBox(
             height: 52,
             child: OutlinedButton.icon(
-              onPressed: () async {
-                final saved = await Navigator.push<bool>(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => AddNoteScreen(book: book),
-                  ),
-                );
-
-                if (!context.mounted) return;
-                if (saved != true) return;
-
-                try {
-                  final group = await _findBookRecordGroup(selection.bookId);
-                  if (!context.mounted) return;
-
-                  if (group != null) {
-                    await Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => BookRecordsScreen(group: group),
-                      ),
-                    );
-                  } else {
-                    showToast(context, '아직 저장된 기록이 없습니다.');
-                  }
-                } catch (e) {
-                  if (!context.mounted) return;
-                  showToast(context, '내 기록 화면 이동 실패: $e');
-                }
-              },
+              onPressed: _goToBookRecords,
               icon: const Icon(Icons.edit_note),
               label: const Text('기록 남기기'),
             ),
@@ -214,11 +241,18 @@ class BookSelectionDetailScreen extends StatelessWidget {
             height: 52,
             child: FilledButton(
               onPressed: () async {
+                AppLogger.action(
+                  'CreateMeetingFromSelection',
+                  detail:
+                      'bookId=${selection.bookId}, title=${selection.bookTitle}',
+                );
+
                 await Navigator.push(
                   context,
                   MaterialPageRoute(
-                    builder: (_) =>
-                        CreateMeetingFromSelectionScreen(selection: selection),
+                    builder: (_) => CreateMeetingFromSelectionScreen(
+                      selection: selection,
+                    ),
                   ),
                 );
               },

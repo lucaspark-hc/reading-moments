@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:reading_moments_app/core/log/app_logger.dart';
+import 'package:reading_moments_app/core/log/logged_state_mixin.dart';
 import 'package:reading_moments_app/core/supabase_client.dart';
 import 'package:reading_moments_app/services/moments_service.dart';
 
@@ -7,12 +9,14 @@ enum MomentVisibility { public, meeting, private }
 class MomentCreateScreen extends StatefulWidget {
   final int bookId;
   final String? initialQuoteText;
+  final String? initialEasyExplainText;
   final String initialInputMethod;
 
   const MomentCreateScreen({
     super.key,
     required this.bookId,
     this.initialQuoteText,
+    this.initialEasyExplainText,
     this.initialInputMethod = 'manual',
   });
 
@@ -20,7 +24,8 @@ class MomentCreateScreen extends StatefulWidget {
   State<MomentCreateScreen> createState() => _MomentCreateScreenState();
 }
 
-class _MomentCreateScreenState extends State<MomentCreateScreen> {
+class _MomentCreateScreenState extends State<MomentCreateScreen>
+    with LoggedStateMixin<MomentCreateScreen> {
   late final TextEditingController _quoteController;
   late final TextEditingController _noteController;
   late final TextEditingController _pageController;
@@ -31,6 +36,9 @@ class _MomentCreateScreenState extends State<MomentCreateScreen> {
   MomentVisibility _visibility = MomentVisibility.private;
 
   @override
+  String get screenName => 'MomentCreateScreen';
+
+  @override
   void initState() {
     super.initState();
     _quoteController = TextEditingController(
@@ -38,6 +46,13 @@ class _MomentCreateScreenState extends State<MomentCreateScreen> {
     );
     _noteController = TextEditingController();
     _pageController = TextEditingController();
+
+    AppLogger.info(
+      'MomentCreateScreen_Init | bookId=${widget.bookId}, inputMethod=${widget.initialInputMethod}, hasQuote=${(widget.initialQuoteText ?? '').trim().isNotEmpty}, hasEasyExplain=${(widget.initialEasyExplainText ?? '').trim().isNotEmpty}',
+    );
+    print(
+      '📝 MomentCreateScreen_Init | bookId=${widget.bookId} | inputMethod=${widget.initialInputMethod} | hasQuote=${(widget.initialQuoteText ?? '').trim().isNotEmpty} | hasEasyExplain=${(widget.initialEasyExplainText ?? '').trim().isNotEmpty}',
+    );
   }
 
   @override
@@ -59,6 +74,29 @@ class _MomentCreateScreenState extends State<MomentCreateScreen> {
     }
   }
 
+  int _estimateQuoteMinLines() {
+    final text = _quoteController.text.trim();
+    final isOcr = widget.initialInputMethod == 'ocr';
+
+    if (text.isEmpty) {
+      return isOcr ? 8 : 5;
+    }
+
+    final newlineCount = '\n'.allMatches(text).length;
+    final length = text.length;
+
+    if (isOcr) {
+      if (newlineCount >= 5 || length > 260) return 12;
+      if (newlineCount >= 3 || length > 180) return 10;
+      if (newlineCount >= 2 || length > 120) return 8;
+      return 7;
+    }
+
+    if (newlineCount >= 3 || length > 180) return 8;
+    if (newlineCount >= 2 || length > 100) return 6;
+    return 5;
+  }
+
   Widget _buildVisibilityOption({
     required MomentVisibility value,
     required IconData icon,
@@ -76,7 +114,11 @@ class _MomentCreateScreenState extends State<MomentCreateScreen> {
         });
       },
       title: Row(
-        children: [Icon(icon, size: 20), const SizedBox(width: 8), Text(title)],
+        children: [
+          Icon(icon, size: 20),
+          const SizedBox(width: 8),
+          Text(title),
+        ],
       ),
       subtitle: Text(subtitle),
     );
@@ -113,27 +155,141 @@ class _MomentCreateScreenState extends State<MomentCreateScreen> {
     );
   }
 
+  Widget _buildEasyExplainSection() {
+    final explainText = widget.initialEasyExplainText?.trim() ?? '';
+    if (explainText.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.blue.shade50,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.blue.shade100),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            '쉽게 풀어보기',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            explainText,
+            style: const TextStyle(height: 1.6),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showSnack(String message) {
+    if (!mounted) return;
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    if (messenger == null) return;
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> _popWithRetry({
+    bool result = true,
+    int maxAttempts = 8,
+  }) async {
+    if (!mounted) return;
+
+    FocusScope.of(context).unfocus();
+    await Future<void>.delayed(const Duration(milliseconds: 16));
+
+    for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+      if (!mounted) return;
+
+      try {
+        final route = ModalRoute.of(context);
+        final navigator = Navigator.of(context);
+
+        if (route == null) {
+          AppLogger.warn(
+            'MomentCreateScreen_PopSkipped | reason=route_null, attempt=$attempt',
+          );
+          return;
+        }
+
+        if (!route.isCurrent) {
+          AppLogger.warn(
+            'MomentCreateScreen_PopSkipped | reason=route_not_current, attempt=$attempt',
+          );
+          return;
+        }
+
+        if (!navigator.canPop()) {
+          AppLogger.warn(
+            'MomentCreateScreen_PopSkipped | reason=cannot_pop, attempt=$attempt',
+          );
+          return;
+        }
+
+        navigator.pop(result);
+
+        AppLogger.action(
+          'MomentCreateScreen_PopSuccess',
+          detail: 'attempt=$attempt',
+        );
+        print('↩️ MomentCreateScreen_PopSuccess | attempt=$attempt');
+        return;
+      } catch (e, st) {
+        AppLogger.apiError(
+          'MomentCreateScreen_PopRetry',
+          e,
+          stackTrace: st,
+        );
+        print('⚠️ MomentCreateScreen_PopRetry | attempt=$attempt | error=$e');
+
+        if (attempt == maxAttempts) {
+          _showSnack('저장은 완료되었지만 화면 이동이 지연되고 있습니다. 뒤로가기를 눌러주세요.');
+          return;
+        }
+
+        await Future<void>.delayed(const Duration(milliseconds: 60));
+      }
+    }
+  }
+
   Future<void> _save() async {
+    if (_saving) return;
+
     final quoteText = _quoteController.text.trim();
+    final explainText = widget.initialEasyExplainText?.trim();
     final noteText = _noteController.text.trim();
-    final page = int.tryParse(_pageController.text.trim());
+    final pageText = _pageController.text.trim();
+    final page = pageText.isEmpty ? null : int.tryParse(pageText);
 
     if (quoteText.isEmpty) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('문장을 입력하세요')));
+      _showSnack('문장을 입력하세요');
+      return;
+    }
+
+    if (pageText.isNotEmpty && page == null) {
+      _showSnack('페이지는 숫자로 입력하세요');
       return;
     }
 
     final user = supabase.auth.currentUser;
     if (user == null) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('로그인이 필요합니다')));
+      _showSnack('로그인이 필요합니다');
       return;
     }
+
+    AppLogger.action(
+      'SaveMoment',
+      detail:
+          'bookId=${widget.bookId}, inputMethod=${widget.initialInputMethod}, visibility=${_visibilityValue()}, hasExplain=${(explainText ?? '').isNotEmpty}, hasNote=${noteText.isNotEmpty}, page=${page ?? 'null'}',
+    );
+    print(
+      '💾 SaveMoment | bookId=${widget.bookId} | inputMethod=${widget.initialInputMethod} | visibility=${_visibilityValue()} | hasExplain=${(explainText ?? '').isNotEmpty} | hasNote=${noteText.isNotEmpty} | page=${page ?? 'null'}',
+    );
 
     setState(() {
       _saving = true;
@@ -144,6 +300,9 @@ class _MomentCreateScreenState extends State<MomentCreateScreen> {
         userId: user.id,
         bookId: widget.bookId,
         quoteText: quoteText,
+        explainText: (explainText == null || explainText.isEmpty)
+            ? null
+            : explainText,
         noteText: noteText.isEmpty ? null : noteText,
         page: page,
         visibility: _visibilityValue(),
@@ -152,19 +311,25 @@ class _MomentCreateScreenState extends State<MomentCreateScreen> {
         inputMethod: widget.initialInputMethod,
       );
 
-      if (!mounted) return;
+      AppLogger.apiSuccess(
+        'createMoment',
+        detail: 'bookId=${widget.bookId}',
+      );
+      print('✅ createMoment SUCCESS | bookId=${widget.bookId}');
 
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('문장이 저장되었습니다')));
+      if (mounted) {
+        setState(() {
+          _saving = false;
+        });
+      }
 
-      Navigator.pop(context, true);
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('저장 실패: $e')));
-    } finally {
+      await _popWithRetry(result: true);
+    } catch (e, st) {
+      AppLogger.apiError('createMoment', e, stackTrace: st);
+      print('❌ createMoment FAIL | $e');
+
+      _showSnack('저장 실패: $e');
+
       if (mounted) {
         setState(() {
           _saving = false;
@@ -176,9 +341,12 @@ class _MomentCreateScreenState extends State<MomentCreateScreen> {
   @override
   Widget build(BuildContext context) {
     final isOcr = widget.initialInputMethod == 'ocr';
+    final quoteMinLines = _estimateQuoteMinLines();
 
     return Scaffold(
-      appBar: AppBar(title: Text(isOcr ? '스캔 문장 기록' : '문장 기록')),
+      appBar: AppBar(
+        title: Text(isOcr ? '스캔 문장 기록' : '문장 기록'),
+      ),
       body: SafeArea(
         child: SingleChildScrollView(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
@@ -192,6 +360,9 @@ class _MomentCreateScreenState extends State<MomentCreateScreen> {
                 ),
                 const SizedBox(height: 16),
               ],
+              _buildEasyExplainSection(),
+              if ((widget.initialEasyExplainText ?? '').trim().isNotEmpty)
+                const SizedBox(height: 20),
               const Text(
                 '좋은 문장',
                 style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
@@ -199,11 +370,20 @@ class _MomentCreateScreenState extends State<MomentCreateScreen> {
               const SizedBox(height: 8),
               TextField(
                 controller: _quoteController,
-                maxLines: 5,
-                decoration: const InputDecoration(
+                minLines: quoteMinLines,
+                maxLines: null,
+                textAlignVertical: TextAlignVertical.top,
+                decoration: InputDecoration(
                   hintText: '기록하고 싶은 문장이나 문단을 입력하세요.',
-                  border: OutlineInputBorder(),
+                  border: const OutlineInputBorder(),
+                  alignLabelWithHint: true,
+                  contentPadding: const EdgeInsets.fromLTRB(14, 16, 14, 16),
+                  helperText: isOcr ? '긴 문장은 아래로 늘려 보며 편집할 수 있습니다.' : null,
                 ),
+                onChanged: (_) {
+                  if (!mounted) return;
+                  setState(() {});
+                },
               ),
               const SizedBox(height: 20),
               const Text(
@@ -213,10 +393,13 @@ class _MomentCreateScreenState extends State<MomentCreateScreen> {
               const SizedBox(height: 8),
               TextField(
                 controller: _noteController,
-                maxLines: 5,
+                minLines: 2,
+                maxLines: 4,
+                textAlignVertical: TextAlignVertical.top,
                 decoration: const InputDecoration(
                   hintText: '떠오른 생각이 있으면 적어보세요. (선택)',
                   border: OutlineInputBorder(),
+                  alignLabelWithHint: true,
                 ),
               ),
               const SizedBox(height: 20),
